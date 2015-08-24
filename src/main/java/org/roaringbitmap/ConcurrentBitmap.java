@@ -94,7 +94,12 @@ public class ConcurrentBitmap implements Iterable<Integer> {
     public int getCardinality() {
         int result = 0;
         for (Element e : highLowMap.values()) {
-            result += e.value.getCardinality();
+            e.rwLock.readLock().lock();
+            try {
+                result += e.value.getCardinality();
+            } finally {
+                e.rwLock.readLock().unlock();
+            }
         }
         return result;
     }
