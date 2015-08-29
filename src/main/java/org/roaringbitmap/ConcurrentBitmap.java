@@ -65,7 +65,7 @@ public class ConcurrentBitmap implements Iterable<Integer> {
         }
 
         // Element might still be null if we are trying to remove a bit from a
-        // non-existing container. We just ignore that request.
+        // non-existing container. We just ignore that request, otherwise:
         if (e != null) {
             short lb = Util.lowbits(x);
             e.rwLock.writeLock().lock();
@@ -167,6 +167,8 @@ public class ConcurrentBitmap implements Iterable<Integer> {
             @Override
             public Integer next() {
 
+                // no locking needed here, as this iterator was from the copied
+                // container
                 x = Util.toIntUnsigned(iter.next()) | (currentKey << 16);
                 if (!iter.hasNext()) {
                     nextContainer();

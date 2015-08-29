@@ -5,6 +5,8 @@
 
 package org.roaringbitmap;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Random;
@@ -19,7 +21,8 @@ import org.junit.Test;
 
 public class TestConcurrentBitmap {
 
-    private final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
+    final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
+    final static int NUM_ITERATIONS = 10000000;
     public final static int NUM_RANGE = 100000000;
     public final static int DENSITY_PERCENTAGE = 30;
 
@@ -31,7 +34,7 @@ public class TestConcurrentBitmap {
     public final static int ADD_PROB = (2 * DENSITY_PERCENTAGE) / 3;
     public final static int REMOVE_PROB = (2 * (100 - DENSITY_PERCENTAGE)) / 3;
 
-    CountDownLatch doneSignal = new CountDownLatch(NUM_THREADS);
+    CountDownLatch finished = new CountDownLatch(NUM_THREADS);
     private final Logger logger = Logger.getLogger(getClass().getName());
 
     @Test
@@ -42,10 +45,131 @@ public class TestConcurrentBitmap {
     }
 
     @Test
-    public void testConcurrentAccess() throws InterruptedException {
+    public void testConcurrentAdd() throws InterruptedException {
 
-        Random r = new Random();
-        final ConcurrentBitmap bitmap = new ConcurrentBitmap();
+        Executor executor = Executors.newCachedThreadPool();
+
+        final Random r = new Random();
+        final long[] seeds = new long[NUM_THREADS];
+        for (int i = 0; i < seeds.length; i++) {
+            seeds[i] = r.nextLong();
+        }
+
+        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+
+        final CountDownLatch readyToStart = new CountDownLatch(NUM_THREADS);
+        final CountDownLatch finished = new CountDownLatch(NUM_THREADS);
+
+        for (int i = 0; i < NUM_THREADS; i++) {
+            final long seed = seeds[i];
+            executor.execute(new Runnable() {
+
+                @Override
+                public void run() {
+                    Random r = new Random(seed);
+                    readyToStart.countDown();
+                    try {
+                        readyToStart.await();
+                        for (int i = 0; i < NUM_ITERATIONS; i++) {
+                            concurrentBitmap.add(r.nextInt(NUM_RANGE));
+                        }
+                        finished.countDown();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            });
+        }
+
+        finished.await();
+        assertTrue(concurrentBitmap.getCardinality() <= NUM_ITERATIONS * NUM_THREADS);
+
+        // check that every integer added by any thread is contained in the
+        // final resulting concurrentBitmap
+        RoaringBitmap controlMap = new RoaringBitmap();
+        for (int i = 0; i < NUM_THREADS; i++) {
+            Random ri = new Random(seeds[i]);
+            for (int j = 0; j < NUM_ITERATIONS; j++) {
+                int v = ri.nextInt(NUM_RANGE);
+                assertTrue("Every integer added in each thread must be in the final result", concurrentBitmap.contains(v));
+                controlMap.add(v);
+            }
+        }
+        assertEquals("Adding in parallel or sequentially must have the same result size", controlMap.getCardinality(), concurrentBitmap.getCardinality());
+
+    }
+
+    @Test
+    public void testConcurrentRemove() throws InterruptedException {
+
+        Executor executor = Executors.newCachedThreadPool();
+
+        final Random seedsRandom = new Random();
+        final long[] seeds = new long[NUM_THREADS];
+        for (int i = 0; i < seeds.length; i++) {
+            seeds[i] = seedsRandom.nextLong();
+        }
+
+        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+
+        final Random mapContentsRandom = new Random(478202868L);
+
+        for (int i = 0; i < 50000000; i++) {
+            concurrentBitmap.add(mapContentsRandom.nextInt(NUM_RANGE));
+        }
+
+        final CountDownLatch readyToStart = new CountDownLatch(NUM_THREADS);
+        final CountDownLatch finished = new CountDownLatch(NUM_THREADS);
+
+        for (int i = 0; i < NUM_THREADS; i++) {
+            final long seed = seeds[i];
+            executor.execute(new Runnable() {
+
+                @Override
+                public void run() {
+                    Random r = new Random(seed);
+                    readyToStart.countDown();
+                    try {
+                        readyToStart.await();
+                        for (int i = 0; i < NUM_ITERATIONS; i++) {
+                            concurrentBitmap.remove(r.nextInt(NUM_RANGE));
+                        }
+                        finished.countDown();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            });
+        }
+
+        finished.await();
+        RoaringBitmap removedElementsMap = new RoaringBitmap();
+        for (int i = 0; i < NUM_THREADS; i++) {
+            Random ri = new Random(seeds[i]);
+            for (int j = 0; j < NUM_ITERATIONS; j++) {
+                int v = ri.nextInt(NUM_RANGE);
+                removedElementsMap.add(v);
+            }
+        }
+
+        // check that the resulting concurrentBitmap has exactly the original
+        // integers except those removed
+        final Random controlRandom = new Random(478202868L);
+        for (int i = 0; i < 50000000; i++) {
+            int v = controlRandom.nextInt(NUM_RANGE);
+            if (removedElementsMap.contains(v)) {
+                assertFalse("This integer was removed by some thread. It can NOT be in the resulting bitmap", concurrentBitmap.contains(v));
+            } else {
+                assertTrue("This integer was NOT removed by any thread. It must still be in the resulting bitmap", concurrentBitmap.contains(v));
+            }
+        }
+    }
+
+    @Test
+    public void testConcurrentAddAndRemove() throws InterruptedException {
+
+        Random r = new Random(97494028L);
+        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
 
         Executor executor = Executors.newCachedThreadPool();
 
@@ -55,15 +179,9 @@ public class TestConcurrentBitmap {
 
         Set<Integer> set = new TreeSet<Integer>();
         while (set.size() < targetBitmapSize) {
-            int x = r.nextInt();
-            if (x < 0) {
-                x = -x;
-            }
-            int l = x % NUM_RANGE;
-            if (l < 0) {
-                l *= -1;
-            }
-            set.add(l);
+            int x = r.nextInt(NUM_RANGE);
+
+            set.add(x);
 
             if (set.size() % 1000000 == 0) {
                 logger.info(" Current set size:" + set.size());
@@ -71,41 +189,95 @@ public class TestConcurrentBitmap {
         }
         logger.info("Constructing bitmap...");
         for (int i : set) {
-            bitmap.add(i);
+            concurrentBitmap.add(i);
         }
         logger.info("Done");
 
         set.clear();
 
+        RoaringBitmap[] addedElementsByThread = new RoaringBitmap[NUM_THREADS];
+        RoaringBitmap[] removedElementsByThread = new RoaringBitmap[NUM_THREADS];
+
         for (int i = 0; i < NUM_THREADS; i++) {
-            executor.execute(new BitmapAccessThread(bitmap, doneSignal));
+            RoaringBitmap addedElements = new RoaringBitmap();
+            RoaringBitmap removedElements = new RoaringBitmap();
+            addedElementsByThread[i] = addedElements;
+            removedElementsByThread[i] = removedElements;
+            executor.execute(new BitmapAccessThread(concurrentBitmap, finished, addedElements, removedElements));
         }
 
-        doneSignal.await();
+        finished.await();
+
+        // The final result will be slightly different on each execution, as
+        // add()'s and remove()'s of the same numbers might execute in different
+        // sequence order. We can only look for impossible scenarios.
+
+        RoaringBitmap totalAdded = FastAggregation.or(addedElementsByThread);
+        RoaringBitmap totalRemoved = FastAggregation.or(removedElementsByThread);
+
+        logger.info("Total added:" + totalAdded.getCardinality());
+        logger.info("Total removed:" + totalRemoved.getCardinality());
+
+        Random rr = new Random(97494028L);
+        long totalAssertions = 0;
+        for (int i = 0; i < targetBitmapSize; i++) {
+            int v = rr.nextInt(NUM_RANGE);
+            if (!totalAdded.contains(v) && totalRemoved.contains(v)) {
+                // original elements not added by any thread and removed by
+                // some thread, should not be in the final result for sure
+                assertFalse("This integer, for sure, should not be in the resulting bitmap", concurrentBitmap.contains(v));
+                totalAssertions++;
+            }
+            if (!totalRemoved.contains(v)) {
+                // original elements not removed by any thread, should still be
+                // in the final result for sure
+                assertTrue("This integer, for sure, should still be in the resulting bitmap", concurrentBitmap.contains(v));
+                totalAssertions++;
+            }
+        }
+
+        logger.info("Assertions on the original elements in the map:" + totalAssertions);
+
+        // any element added by some thread and not removed by any other,
+        // should be in the final result for sure
+        totalAssertions = 0;
+        IntIterator addedIter = totalAdded.getIntIterator();
+        while (addedIter.hasNext()) {
+            int v = addedIter.next();
+            if (!totalRemoved.contains(v)) {
+                assertTrue(concurrentBitmap.contains(v));
+                totalAssertions++;
+            }
+        }
+        logger.info("Assertions on the added and not removed elements in the map:" + totalAssertions);
+
     }
 
     private static class BitmapAccessThread implements Runnable {
 
         private ConcurrentBitmap bitmap;
         private CountDownLatch doneSignal;
-        private final int NUM_ITERATIONS = 50000000;
         protected Logger logger = Logger.getLogger(getClass().getName());
+        final RoaringBitmap addedElements;
+        final RoaringBitmap removedElements;
 
-        public BitmapAccessThread(ConcurrentBitmap bitmap, CountDownLatch doneSignal) {
+        public BitmapAccessThread(ConcurrentBitmap bitmap, CountDownLatch doneSignal, RoaringBitmap addedElements, RoaringBitmap removedElements) {
             this.bitmap = bitmap;
             this.doneSignal = doneSignal;
+            this.addedElements = addedElements;
+            this.removedElements = removedElements;
         }
 
         @Override
         public void run() {
             try {
-                accessBitmapRandomly(bitmap);
+                accessBitmapRandomly();
             } finally {
                 doneSignal.countDown();
             }
         }
 
-        protected void accessBitmapRandomly(ConcurrentBitmap dataSource) {
+        protected void accessBitmapRandomly() {
 
             Random r = new Random();
             long totalAddNs = 0;
@@ -131,17 +303,19 @@ public class TestConcurrentBitmap {
 
                 if (action < ADD_PROB) {
                     long before = System.nanoTime();
-                    dataSource.add(l);
+                    bitmap.add(l);
+                    addedElements.add(l);
                     totalAddNs += (System.nanoTime() - before);
                     totalAdd++;
                 } else if (action < ADD_PROB + REMOVE_PROB) {
                     long before = System.nanoTime();
-                    dataSource.remove(l);
+                    bitmap.remove(l);
+                    removedElements.add(l);
                     totalRemoveNs += (System.nanoTime() - before);
                     totalRemove++;
                 } else {
                     long before = System.nanoTime();
-                    dataSource.contains(l);
+                    bitmap.contains(l);
                     totalContainsNs += (System.nanoTime() - before);
                     totalContains++;
                 }
