@@ -9,6 +9,8 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import org.apache.commons.lang3.NotImplementedException;
+
 /**
  * A thread-safe bitmap implementation. Concurrency is achieved by using
  * ReentrantReadWriteLocks at the container level and a ConcurrentHashMap to
@@ -217,7 +219,7 @@ public class ConcurrentBitmap {
 
         @Override
         public IntIterator clone() {
-            return null;
+            throw new NotImplementedException("Clone is not supported");
         }
     }
 }
