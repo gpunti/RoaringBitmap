@@ -5,11 +5,10 @@
 
 package org.roaringbitmap;
 
+import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import org.apache.commons.lang3.NotImplementedException;
 
 /**
  * A thread-safe bitmap implementation. Concurrency is achieved by using
@@ -174,12 +173,14 @@ public class ConcurrentBitmap {
 
         private void nextContainer() {
 
+            // update the ordered list of containers
             sortedKeySet.clear();
             sortedKeySet.addAll(highLowMap.keySet());
 
             boolean trySearchNextKey = true;
             Short nextKey = null;
             while ((nextKey == null) && trySearchNextKey) {
+                // get the next container
                 nextKey = sortedKeySet.higher(currentKey);
                 trySearchNextKey = false;
 
@@ -206,8 +207,7 @@ public class ConcurrentBitmap {
 
         @Override
         public int next() {
-
-            // no locking needed here, as this iterator was from the copied
+            // no locking needed here, as this iterator was from a cloned
             // container
             x = Util.toIntUnsigned(iter.next()) | (currentKey << 16);
             if (!iter.hasNext()) {
@@ -219,7 +219,22 @@ public class ConcurrentBitmap {
 
         @Override
         public IntIterator clone() {
-            throw new NotImplementedException("Clone is not supported");
+            throw new UnsupportedOperationException();
         }
     }
+
+    public int getSizeInBytes() {
+        int size = 8;
+        for (Map.Entry<Short, Element> e : highLowMap.entrySet()) {
+            final Container c = e.getValue().value;
+            e.getValue().rwLock.readLock().lock();
+            try {
+                size += 56 + c.getSizeInBytes();
+            } finally {
+                e.getValue().rwLock.readLock().lock();
+            }
+        }
+        return size;
+    }
+
 }
