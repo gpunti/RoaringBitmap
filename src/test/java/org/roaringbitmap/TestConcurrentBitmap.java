@@ -21,20 +21,11 @@ import org.junit.Test;
 
 public class TestConcurrentBitmap {
 
-    final int NUM_THREADS = Runtime.getRuntime().availableProcessors();
-    final static int NUM_ITERATIONS = 10000000;
+    public final static int NUM_THREADS = Runtime.getRuntime().availableProcessors();
+    public final static int NUM_ITERATIONS = 10000000;
     public final static int NUM_RANGE = 100000000;
-    public final static int DENSITY_PERCENTAGE = 30;
+    public final int DENSITY_PERCENTAGE = 30;
 
-    // One third of requests will be calls to contains() method
-    public final static int CONTAINS_PROB = (1 * 100) / 3;
-
-    // The rest will be add() and remove() method calls, distributed so that we
-    // maintain the desired density percentage
-    public final static int ADD_PROB = (2 * DENSITY_PERCENTAGE) / 3;
-    public final static int REMOVE_PROB = (2 * (100 - DENSITY_PERCENTAGE)) / 3;
-
-    CountDownLatch finished = new CountDownLatch(NUM_THREADS);
     private final Logger logger = Logger.getLogger(getClass().getName());
 
     @Test
@@ -50,30 +41,31 @@ public class TestConcurrentBitmap {
         Executor executor = Executors.newCachedThreadPool();
 
         final Random r = new Random();
-        final long[] seeds = new long[NUM_THREADS];
-        for (int i = 0; i < seeds.length; i++) {
-            seeds[i] = r.nextLong();
+        final long[] threadSeeds = new long[NUM_THREADS];
+        for (int i = 0; i < threadSeeds.length; i++) {
+            threadSeeds[i] = r.nextLong();
         }
 
         final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
 
-        final CountDownLatch readyToStart = new CountDownLatch(NUM_THREADS);
-        final CountDownLatch finished = new CountDownLatch(NUM_THREADS);
+        final CountDownLatch threadsReady = new CountDownLatch(NUM_THREADS);
+        final CountDownLatch threadsFinished = new CountDownLatch(NUM_THREADS);
 
         for (int i = 0; i < NUM_THREADS; i++) {
-            final long seed = seeds[i];
+            final long seed = threadSeeds[i];
             executor.execute(new Runnable() {
 
                 @Override
                 public void run() {
                     Random r = new Random(seed);
-                    readyToStart.countDown();
+                    threadsReady.countDown();
                     try {
-                        readyToStart.await();
+                        threadsReady.await();
+                        logger.info("Starting thread:" + Thread.currentThread());
                         for (int i = 0; i < NUM_ITERATIONS; i++) {
                             concurrentBitmap.add(r.nextInt(NUM_RANGE));
                         }
-                        finished.countDown();
+                        threadsFinished.countDown();
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
@@ -81,14 +73,14 @@ public class TestConcurrentBitmap {
             });
         }
 
-        finished.await();
+        threadsFinished.await();
         assertTrue(concurrentBitmap.getCardinality() <= NUM_ITERATIONS * NUM_THREADS);
 
         // check that every integer added by any thread is contained in the
         // final resulting concurrentBitmap
         RoaringBitmap controlMap = new RoaringBitmap();
         for (int i = 0; i < NUM_THREADS; i++) {
-            Random ri = new Random(seeds[i]);
+            Random ri = new Random(threadSeeds[i]);
             for (int j = 0; j < NUM_ITERATIONS; j++) {
                 int v = ri.nextInt(NUM_RANGE);
                 assertTrue("Every integer added in each thread must be in the final result", concurrentBitmap.contains(v));
@@ -129,6 +121,7 @@ public class TestConcurrentBitmap {
                 public void run() {
                     Random r = new Random(seed);
                     readyToStart.countDown();
+                    logger.info("Starting thread:" + Thread.currentThread());
                     try {
                         readyToStart.await();
                         for (int i = 0; i < NUM_ITERATIONS; i++) {
@@ -172,6 +165,7 @@ public class TestConcurrentBitmap {
         final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
 
         Executor executor = Executors.newCachedThreadPool();
+        CountDownLatch threadsFinished = new CountDownLatch(NUM_THREADS);
 
         int targetBitmapSize = (NUM_RANGE / 100) * DENSITY_PERCENTAGE;
 
@@ -203,10 +197,10 @@ public class TestConcurrentBitmap {
             RoaringBitmap removedElements = new RoaringBitmap();
             addedElementsByThread[i] = addedElements;
             removedElementsByThread[i] = removedElements;
-            executor.execute(new BitmapAccessThread(concurrentBitmap, finished, addedElements, removedElements));
+            executor.execute(new BitmapAccessThread(concurrentBitmap, threadsFinished, addedElements, removedElements));
         }
 
-        finished.await();
+        threadsFinished.await();
 
         // The final result will be slightly different on each execution, as
         // add()'s and remove()'s of the same numbers might execute in different
@@ -218,10 +212,10 @@ public class TestConcurrentBitmap {
         logger.info("Total added:" + totalAdded.getCardinality());
         logger.info("Total removed:" + totalRemoved.getCardinality());
 
-        Random rr = new Random(97494028L);
+        Random regenerate = new Random(97494028L);
         long totalAssertions = 0;
         for (int i = 0; i < targetBitmapSize; i++) {
-            int v = rr.nextInt(NUM_RANGE);
+            int v = regenerate.nextInt(NUM_RANGE);
             if (!totalAdded.contains(v) && totalRemoved.contains(v)) {
                 // original elements not added by any thread and removed by
                 // some thread, should not be in the final result for sure
@@ -253,7 +247,7 @@ public class TestConcurrentBitmap {
 
     }
 
-    private static class BitmapAccessThread implements Runnable {
+    class BitmapAccessThread implements Runnable {
 
         private ConcurrentBitmap bitmap;
         private CountDownLatch doneSignal;
@@ -279,6 +273,12 @@ public class TestConcurrentBitmap {
 
         protected void accessBitmapRandomly() {
 
+            // 2/3 of accesses will be add() and remove() method calls,
+            // distributed so that we maintain the desired density percentage.
+            // The remaining 1/3 will be contains() method calls.
+            final int ADD_PROB = (2 * DENSITY_PERCENTAGE) / 3;
+            final int REMOVE_PROB = (2 * (100 - DENSITY_PERCENTAGE)) / 3;
+
             Random r = new Random();
             long totalAddNs = 0;
             long totalAdd = 0;
@@ -290,16 +290,9 @@ public class TestConcurrentBitmap {
             int i = 0;
             while (i < NUM_ITERATIONS) {
 
-                int l = r.nextInt() % NUM_RANGE;
+                int l = r.nextInt(NUM_RANGE);
 
-                if (l < 0)
-                    l = -l;
-
-                int action = r.nextInt() % 100;
-
-                if (action < 0) {
-                    action *= -1;
-                }
+                int action = r.nextInt(100);
 
                 if (action < ADD_PROB) {
                     long before = System.nanoTime();
@@ -319,8 +312,7 @@ public class TestConcurrentBitmap {
                     totalContainsNs += (System.nanoTime() - before);
                     totalContains++;
                 }
-                i++;
-                if (i % (NUM_ITERATIONS / 20) == 0) {
+                if (i++ % (NUM_ITERATIONS / 20) == 0) {
                     logger.info("Thread:" + Thread.currentThread() + " reached " + i + " iterations");
                 }
             }
@@ -333,6 +325,39 @@ public class TestConcurrentBitmap {
             logger.info("Mean remove time(ns):" + meanRemoveNs);
             logger.info("Mean contains time(ns):" + meanContainsNs);
         }
+    }
 
+    @Test
+    public void testIntIterator() {
+        Random r = new Random(97494028L);
+        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+
+        logger.info("Filling bitmap with " + NUM_ITERATIONS + " random numbers between 0 and " + NUM_RANGE + "...");
+
+        Set<Integer> set = new TreeSet<Integer>();
+        while (set.size() < NUM_ITERATIONS) {
+            int x = r.nextInt(NUM_RANGE);
+            set.add(x);
+            if (set.size() % 1000000 == 0) {
+                logger.info(" Current set size:" + set.size());
+            }
+        }
+        logger.info("Constructing bitmap...");
+        for (int i : set) {
+            concurrentBitmap.add(i);
+        }
+        logger.info("Done");
+
+        IntIterator iter = concurrentBitmap.getIntIterator();
+        
+        long total = 0;
+        while (iter.hasNext()) {
+            assertTrue(set.contains(iter.next()));
+            total++;
+        }
+        
+        assertEquals(NUM_ITERATIONS,total);
+
+        set.clear();
     }
 }

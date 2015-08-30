@@ -5,7 +5,6 @@
 
 package org.roaringbitmap;
 
-import java.util.Iterator;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -15,7 +14,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * ReentrantReadWriteLocks at the container level and a ConcurrentHashMap to
  * maintain the container list integrity.
  */
-public class ConcurrentBitmap implements Iterable<Integer> {
+public class ConcurrentBitmap {
 
     private ConcurrentHashMap<Short, Element> highLowMap = new ConcurrentHashMap<Short, Element>();
 
@@ -104,87 +103,6 @@ public class ConcurrentBitmap implements Iterable<Integer> {
         return result;
     }
 
-    /**
-     * This iterator is backed by the bitmap data. Changing the data in the
-     * bitmap will change the data being iterated. This means that the data
-     * retrieved is not the 'snapshot' of the bitmap at any precise moment.
-     * Instead, the iterator reflects the changes being done in the bitmap as
-     * you iterate over it.
-     */
-    @Override
-    public Iterator<Integer> iterator() {
-        return new Iterator<Integer>() {
-
-            private ShortIterator iter;
-            TreeSet<Short> sortedKeySet = new TreeSet<Short>();
-
-            private int x;
-
-            private Short currentKey = Short.MIN_VALUE;
-
-            @Override
-            public boolean hasNext() {
-                return currentKey != null;
-            }
-
-            private Iterator<Integer> init() {
-                nextContainer();
-                return this;
-            }
-
-            private void nextContainer() {
-
-                sortedKeySet.clear();
-                sortedKeySet.addAll(highLowMap.keySet());
-
-                boolean trySearchNextKey = true;
-                Short nextKey = null;
-                while ((nextKey == null) && trySearchNextKey) {
-                    nextKey = sortedKeySet.higher(currentKey);
-                    trySearchNextKey = false;
-
-                    if (nextKey != null) {
-                        Element e = highLowMap.get(nextKey);
-                        if (e != null) {
-                            // we clone the container so we are be able to
-                            // iterate over it without holding any lock
-                            ReentrantReadWriteLock hbLock = e.rwLock;
-                            hbLock.readLock().lock();
-                            iter = e.value.clone().getShortIterator();
-                            hbLock.readLock().unlock();
-                        } else {
-                            // the container was removed between checking the
-                            // next key and retrieving its container. We'll look
-                            // for the following one
-                            nextKey = null;
-                            trySearchNextKey = true;
-                        }
-                    }
-                    currentKey = nextKey;
-                }
-            }
-
-            @Override
-            public Integer next() {
-
-                // no locking needed here, as this iterator was from the copied
-                // container
-                x = Util.toIntUnsigned(iter.next()) | (currentKey << 16);
-                if (!iter.hasNext()) {
-                    nextContainer();
-                }
-
-                return x;
-            }
-
-            @Override
-            public void remove() {
-                throw new UnsupportedOperationException();
-            }
-
-        }.init();
-    }
-
     public static final class Element implements Cloneable, Comparable<Element> {
         short key;
         Container value = null;
@@ -220,6 +138,86 @@ public class ConcurrentBitmap implements Iterable<Integer> {
         @Override
         public int compareTo(Element o) {
             return Util.toIntUnsigned(this.key) - Util.toIntUnsigned(o.key);
+        }
+    }
+
+    public IntIterator getIntIterator() {
+        return new ConcurrentIntIterator();
+    }
+
+    /**
+     * This iterator is backed by the bitmap data. Changing the data in the
+     * bitmap will change the data being iterated. This means that the data
+     * retrieved is not the 'snapshot' of the bitmap at any precise moment.
+     * Instead, the iterator reflects the changes being done in the bitmap as
+     * you iterate over it.
+     */
+    private final class ConcurrentIntIterator implements IntIterator {
+
+        public ConcurrentIntIterator() {
+            nextContainer();
+        }
+
+        private ShortIterator iter;
+        TreeSet<Short> sortedKeySet = new TreeSet<Short>();
+
+        private int x;
+
+        private Short currentKey = Short.MIN_VALUE;
+
+        @Override
+        public boolean hasNext() {
+            return currentKey != null;
+        }
+
+        private void nextContainer() {
+
+            sortedKeySet.clear();
+            sortedKeySet.addAll(highLowMap.keySet());
+
+            boolean trySearchNextKey = true;
+            Short nextKey = null;
+            while ((nextKey == null) && trySearchNextKey) {
+                nextKey = sortedKeySet.higher(currentKey);
+                trySearchNextKey = false;
+
+                if (nextKey != null) {
+                    Element e = highLowMap.get(nextKey);
+                    if (e != null) {
+                        // we clone the container so we are be able to
+                        // iterate over it without holding any lock
+                        ReentrantReadWriteLock hbLock = e.rwLock;
+                        hbLock.readLock().lock();
+                        iter = e.value.clone().getShortIterator();
+                        hbLock.readLock().unlock();
+                    } else {
+                        // the container was removed between checking the
+                        // next key and retrieving its container. We'll look
+                        // for the following one
+                        nextKey = null;
+                        trySearchNextKey = true;
+                    }
+                }
+                currentKey = nextKey;
+            }
+        }
+
+        @Override
+        public int next() {
+
+            // no locking needed here, as this iterator was from the copied
+            // container
+            x = Util.toIntUnsigned(iter.next()) | (currentKey << 16);
+            if (!iter.hasNext()) {
+                nextContainer();
+            }
+
+            return x;
+        }
+
+        @Override
+        public IntIterator clone() {
+            return null;
         }
     }
 }
