@@ -49,10 +49,26 @@ public final class RunContainer extends Container implements Cloneable {
         return sb.toString();
     }
 
-    // needed for deserialization
-    protected RunContainer(short [] valueslength) {
-        this(valueslength.length/2, valueslength);
+    /**
+     * Construct a new RunContainer backed by the provided array. Note
+     * that if you modify the RunContainer a new array may be produced.
+     * 
+     * @param array
+     *            array where the data is stored
+     * @param numRuns
+     *            number of runs (each using 2 shorts in the buffer)
+     *            
+     */
+    public RunContainer(final short[] array,
+            final int numRuns) {
+        if (array.length < 2*numRuns)
+            throw new RuntimeException(
+                    "Mismatch between buffer and numRuns");
+        this.nbrruns = numRuns;
+        this.valueslength = array;
     }
+
+
 
     // lower-level specialized implementations might be faster
     protected RunContainer( ShortIterator sIt, int nbrRuns) {
@@ -241,8 +257,31 @@ public final class RunContainer extends Container implements Cloneable {
         System.arraycopy(valueslength, 0, nv, 0, 2 * nbrruns);
         valueslength = nv;
     }
+    
+ // Push all values length to the end of the array (resize array if needed)
+    private void copyToOffset(int offset) {
+        final int minCapacity = 2 * (offset + nbrruns) ;
+        if (valueslength.length < minCapacity) {
+            // expensive case where we need to reallocate
+            int newCapacity = valueslength.length;
+            while (newCapacity < minCapacity) {
+                newCapacity = (newCapacity == 0) ? DEFAULT_INIT_SIZE
+                        : newCapacity < 64 ? newCapacity * 2
+                        : newCapacity < 1024 ? newCapacity * 3 / 2
+                        : newCapacity * 5 / 4;
+            }
+            short[] newvalueslength = new short[newCapacity];
+            copyValuesLength(this.valueslength, 0, newvalueslength, offset, nbrruns);
+            this.valueslength = newvalueslength;
+        } else {
+            // efficient case where we just copy 
+            copyValuesLength(this.valueslength, 0, this.valueslength, offset, nbrruns);
+        }
+    }
 
-    private void ensureCapacity(int minNbRuns) {
+
+    // not actually used anywhere, but potentially useful
+    protected void ensureCapacity(int minNbRuns) {
         final int minCapacity = 2 * minNbRuns;
         if(valueslength.length < minCapacity) {
             int newCapacity = valueslength.length;
@@ -600,7 +639,37 @@ public final class RunContainer extends Container implements Cloneable {
     @Override
     public Container ior(ArrayContainer x) {
         if(isFull()) return this;
-        return or(x);
+        final int nbrruns = this.nbrruns;
+        final int offset = Math.max(nbrruns, x.getCardinality());
+        copyToOffset(offset);
+        int rlepos = 0;
+        this.nbrruns = 0;
+        PeekableShortIterator i = (PeekableShortIterator) x.getShortIterator();
+        while (i.hasNext() && (rlepos < nbrruns) ) {
+            if(Util.compareUnsigned(getValue(rlepos + offset), i.peekNext()) <= 0) {
+                smartAppend(getValue(rlepos + offset), getLength(rlepos + offset));
+                rlepos++;
+            } else {
+                smartAppend(i.next());
+            }
+        }        
+        if (i.hasNext()) {
+            if(this.nbrruns>0) {
+                // this might be useful if the run container has just one very large run
+                int lastval = Util.toIntUnsigned(getValue(nbrruns + offset - 1))
+                        + Util.toIntUnsigned(getLength(nbrruns + offset - 1)) + 1;
+                i.advanceIfNeeded((short) lastval);
+            }
+            while (i.hasNext()) {
+                smartAppend(i.next());
+            }
+        } else {
+            while (rlepos < nbrruns) {
+                smartAppend(getValue(rlepos + offset), getLength(rlepos + offset));
+                rlepos++;
+            }
+        }
+        return toEfficientContainer();
     }
 
     @Override
@@ -647,11 +716,11 @@ public final class RunContainer extends Container implements Cloneable {
     
     protected Container ilazyor(ArrayContainer x) {
         if(isFull()) return this; // this can sometimes solve a lot of computation!
-        return lazyorToRun(x);
+        return ilazyorToRun(x);
      } 
 
     protected Container lazyor(ArrayContainer x) {
-       return lazyorToRun(x);  // this can sometimes solve a lot of computation!
+       return lazyorToRun(x);//lazyorToRun(x); 
     } 
     
     protected boolean isFull() {
@@ -661,7 +730,7 @@ public final class RunContainer extends Container implements Cloneable {
     private Container lazyorToRun(ArrayContainer x) {
         if(isFull()) return this.clone();
         // TODO: should optimize for the frequent case where we have a single run
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.getCardinality())]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.getCardinality())],0);
         int rlepos = 0;
         PeekableShortIterator i = (PeekableShortIterator) x.getShortIterator();
 
@@ -677,8 +746,8 @@ public final class RunContainer extends Container implements Cloneable {
         if (i.hasNext()) {
             if(answer.nbrruns>0) {
                 // this might be useful if the run container has just one very large run
-                int lastval = Util.toIntUnsigned(answer.getValue(answer.nbrruns))
-                        + Util.toIntUnsigned(answer.getLength(answer.nbrruns)) + 1;
+                int lastval = Util.toIntUnsigned(answer.getValue(answer.nbrruns - 1))
+                        + Util.toIntUnsigned(answer.getLength(answer.nbrruns - 1)) + 1;
                 i.advanceIfNeeded((short) lastval);
             }
             while (i.hasNext()) {
@@ -692,11 +761,47 @@ public final class RunContainer extends Container implements Cloneable {
         }
         return answer.convertToLazyBitmapIfNeeded();
     }
+
+    private Container ilazyorToRun(ArrayContainer x) {
+        if(isFull()) return this.clone();
+        final int nbrruns = this.nbrruns;
+        final int offset = Math.max(nbrruns, x.getCardinality());
+        copyToOffset(offset);
+        int rlepos = 0;
+        this.nbrruns = 0;
+        PeekableShortIterator i = (PeekableShortIterator) x.getShortIterator();
+        while (i.hasNext() && (rlepos < nbrruns) ) {
+            if(Util.compareUnsigned(getValue(rlepos + offset), i.peekNext()) <= 0) {
+                smartAppend(getValue(rlepos + offset), getLength(rlepos + offset));
+                rlepos++;
+            } else {
+                smartAppend(i.next());
+            }
+        }        
+        if (i.hasNext()) {
+            if(this.nbrruns>0) {
+                // this might be useful if the run container has just one very large run
+                int lastval = Util.toIntUnsigned(getValue(nbrruns + offset - 1))
+                        + Util.toIntUnsigned(getLength(nbrruns + offset - 1)) + 1;
+                i.advanceIfNeeded((short) lastval);
+            }
+            while (i.hasNext()) {
+                smartAppend(i.next());
+            }
+        } else {
+            while (rlepos < nbrruns) {
+                smartAppend(getValue(rlepos + offset), getLength(rlepos + offset));
+                rlepos++;
+            }
+        }
+        return convertToLazyBitmapIfNeeded();
+    }
+
     
     private Container lazyxor(ArrayContainer x) {
         if(x.getCardinality() == 0) return this;
         if(this.nbrruns == 0) return x;
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.getCardinality())]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.getCardinality())],0);
         int rlepos = 0;
         ShortIterator i = x.getShortIterator();
         short cv = i.next();
@@ -882,8 +987,7 @@ public final class RunContainer extends Container implements Cloneable {
                 break;
             }
         }
-        RunContainer rc = new RunContainer(r, Arrays.copyOf(valueslength, 2*r));
-        // TODO: OFK: this ends up doing a double array copy.
+        RunContainer rc = new RunContainer( Arrays.copyOf(valueslength, 2*r),r);
         rc.setLength(r - 1, (short) (Util.toIntUnsigned(rc.getLength(r - 1)) - cardinality + maxcardinality));
         return rc;
     }
@@ -1305,7 +1409,7 @@ public final class RunContainer extends Container implements Cloneable {
 
     @Override
       public Container and(RunContainer x) {
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.nbrruns)]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.nbrruns)],0);
         int rlepos = 0;
         int xrlepos = 0;
         int start = Util.toIntUnsigned(this.getValue(rlepos));
@@ -1383,7 +1487,7 @@ public final class RunContainer extends Container implements Cloneable {
 
     @Override
     public Container andNot(RunContainer x) {
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.nbrruns)]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.nbrruns)],0);
         int rlepos = 0;
         int xrlepos = 0;
         int start = Util.toIntUnsigned(this.getValue(rlepos));
@@ -1440,7 +1544,7 @@ public final class RunContainer extends Container implements Cloneable {
 
     private RunContainer lazyandNot(ArrayContainer x) {
         if(x.getCardinality() == 0) return this;
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.cardinality)]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.cardinality)],0);
         int rlepos = 0;
         int xrlepos = 0;
         int start = Util.toIntUnsigned(this.getValue(rlepos));
@@ -1512,9 +1616,7 @@ public final class RunContainer extends Container implements Cloneable {
         final int offset = Math.max(nbrruns, xnbrruns);
 
         // Push all values length to the end of the array (resize array if needed)
-        ensureCapacity(offset + nbrruns);
-        copyValuesLength(this.valueslength, 0, this.valueslength, offset, nbrruns);
-
+        copyToOffset(offset);
         // Aggregate and store the result at the beginning of the array
         this.nbrruns = 0;
         int rlepos = 0;
@@ -1545,7 +1647,6 @@ public final class RunContainer extends Container implements Cloneable {
             this.smartAppend(x.getValue(xrlepos), x.getLength(xrlepos));
             ++xrlepos;
         }
-
         return this.toBitmapIfNeeded();
     }
 
@@ -1675,7 +1776,7 @@ public final class RunContainer extends Container implements Cloneable {
         if(isFull()) return clone();
         if(x.isFull()) return x.clone(); // cheap case that can save a lot of computation
         // we really ought to optimize the rest of the code for the frequent case where there is a single run
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.nbrruns)]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.nbrruns)],0);
         int rlepos = 0;
         int xrlepos = 0;
 
@@ -1705,7 +1806,7 @@ public final class RunContainer extends Container implements Cloneable {
     public Container xor(RunContainer x) {
         if(x.nbrruns == 0) return this.clone();
         if(this.nbrruns == 0) return x.clone();
-        RunContainer answer = new RunContainer(0,new short[2 * (this.nbrruns + x.nbrruns)]);
+        RunContainer answer = new RunContainer(new short[2 * (this.nbrruns + x.nbrruns)],0);
         int rlepos = 0;
         int xrlepos = 0;
 

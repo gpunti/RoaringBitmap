@@ -5,7 +5,6 @@
 package org.roaringbitmap.buffer;
 
 
-import org.roaringbitmap.Container;
 import org.roaringbitmap.PeekableShortIterator;
 import org.roaringbitmap.ShortIterator;
 
@@ -51,7 +50,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
      */
     public MappeableRunContainer(final ShortBuffer array,
             final int numRuns) {
-        if (array.limit() != 2*numRuns)
+        if (array.limit() < 2*numRuns)
             throw new RuntimeException(
                     "Mismatch between buffer and numRuns");
         this.nbrruns = numRuns;
@@ -60,11 +59,6 @@ public final class MappeableRunContainer extends MappeableContainer implements C
 
 
 
-    
-    // needed for deserialization
-    protected MappeableRunContainer(ShortBuffer valueslength) {
-        this(valueslength.limit()/2, valueslength);
-    }
 
     protected MappeableRunContainer( ShortIterator sIt, int nbrRuns) {
         this.nbrruns = nbrRuns;
@@ -315,10 +309,32 @@ public final class MappeableRunContainer extends MappeableContainer implements C
         nv.put(valueslength);
         valueslength = nv;
     }
-
-    private void ensureCapacity(int minNbRuns) {
-        final int minCapacity = 2 * minNbRuns;
+    
+    // Push all values length to the end of the array (resize array if needed)
+    private void copyToOffset(int offset) {
+        final int minCapacity = 2 * (offset + nbrruns) ;
         if (valueslength.capacity() < minCapacity) {
+            // expensive case where we need to reallocate
+            int newCapacity = valueslength.capacity();
+            while (newCapacity < minCapacity) {
+                newCapacity = (newCapacity == 0) ? DEFAULT_INIT_SIZE
+                        : newCapacity < 64 ? newCapacity * 2
+                        : newCapacity < 1024 ? newCapacity * 3 / 2
+                        : newCapacity * 5 / 4;
+            }
+            ShortBuffer newvalueslength = ShortBuffer.allocate(newCapacity);
+            copyValuesLength(this.valueslength, 0, newvalueslength, offset, nbrruns);
+            this.valueslength = newvalueslength;
+        } else {
+            // efficient case where we just copy 
+            copyValuesLength(this.valueslength, 0, this.valueslength, offset, nbrruns);
+        }
+    }
+    
+    // not actually used anywhere, but potentially useful
+    protected void   ensureCapacity(int minNbRuns) {
+        final int minCapacity = 2 * minNbRuns;
+        if (valueslength.capacity() < minCapacity) {            
             int newCapacity = valueslength.capacity();
             while (newCapacity < minCapacity) {
                 newCapacity = (newCapacity == 0) ? DEFAULT_INIT_SIZE
@@ -682,7 +698,38 @@ public final class MappeableRunContainer extends MappeableContainer implements C
     @Override
     public MappeableContainer ior(MappeableArrayContainer x) {
         if(isFull()) return this;
-        return or(x);
+        final int nbrruns = this.nbrruns;
+        final int offset = Math.max(nbrruns, x.getCardinality());
+        copyToOffset(offset);
+        short[] vl = this.valueslength.array();
+        int rlepos = 0;
+        this.nbrruns = 0;
+        PeekableShortIterator i = (PeekableShortIterator) x.getShortIterator();
+        while (i.hasNext() && (rlepos < nbrruns) ) {
+            if(BufferUtil.compareUnsigned(getValue(vl,rlepos + offset), i.peekNext()) <= 0) {
+                smartAppend(vl,getValue(vl,rlepos + offset), getLength(vl,rlepos + offset));
+                rlepos++;
+            } else {
+                smartAppend(vl,i.next());
+            }
+        }        
+        if (i.hasNext()) {
+            if(this.nbrruns>0) {
+                // this might be useful if the run container has just one very large run
+                int lastval = BufferUtil.toIntUnsigned(getValue(nbrruns + offset - 1))
+                        + BufferUtil.toIntUnsigned(getLength(nbrruns + offset - 1)) + 1;
+                i.advanceIfNeeded((short) lastval);
+            }
+            while (i.hasNext()) {
+                smartAppend(vl,i.next());
+            }
+        } else {
+            while (rlepos < nbrruns) {
+                smartAppend(vl,getValue(vl,rlepos + offset), getLength(vl,rlepos + offset));
+                rlepos++;
+            }
+        }
+        return toEfficientContainer();
     }
 
     @Override
@@ -735,7 +782,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
     }
     protected MappeableContainer ilazyor(MappeableArrayContainer x) {
         if(isFull()) return this;  // this can sometimes solve a lot of computation!
-        return lazyorToRun(x);
+        return ilazyorToRun(x);
     }
    
     protected MappeableContainer lazyor(MappeableArrayContainer x) {
@@ -745,7 +792,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
     private MappeableContainer lazyorToRun(MappeableArrayContainer x) {
         if(isFull()) return this.clone();
         // TODO: should optimize for the frequent case where we have a single run
-        MappeableRunContainer answer = new MappeableRunContainer(0,ShortBuffer.allocate(2 * (this.nbrruns + x.getCardinality())));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.getCardinality())),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         PeekableShortIterator i = (PeekableShortIterator) x.getShortIterator();
@@ -762,8 +809,8 @@ public final class MappeableRunContainer extends MappeableContainer implements C
         if(i.hasNext()) {
             if(answer.nbrruns>0) {
                 // this might be useful if the run container has just one very large run
-                int lastval = BufferUtil.toIntUnsigned(answer.getValue(answer.nbrruns))
-                        + BufferUtil.toIntUnsigned(answer.getLength(answer.nbrruns)) + 1;
+                int lastval = BufferUtil.toIntUnsigned(answer.getValue(answer.nbrruns - 1))
+                        + BufferUtil.toIntUnsigned(answer.getLength(answer.nbrruns - 1)) + 1;
                 i.advanceIfNeeded((short) lastval);
             }
             while (i.hasNext()) {
@@ -780,10 +827,47 @@ public final class MappeableRunContainer extends MappeableContainer implements C
         return answer.convertToLazyBitmapIfNeeded();
     }
 
+    private MappeableContainer ilazyorToRun(MappeableArrayContainer x) {
+        if(isFull()) return this.clone();
+        final int nbrruns = this.nbrruns;
+        final int offset = Math.max(nbrruns, x.getCardinality());
+        copyToOffset(offset);
+        short[] vl = valueslength.array();
+        int rlepos = 0;
+        this.nbrruns = 0;
+        PeekableShortIterator i = (PeekableShortIterator) x.getShortIterator();
+        while (i.hasNext() && (rlepos < nbrruns) ) {
+            if(BufferUtil.compareUnsigned(getValue(vl,rlepos + offset), i.peekNext()) <= 0) {
+                smartAppend(vl,getValue(vl,rlepos + offset), getLength(vl,rlepos + offset));
+                rlepos++;
+            } else {
+                smartAppend(vl,i.next());
+            }
+        }        
+        if (i.hasNext()) {
+            if(this.nbrruns>0) {
+                // this might be useful if the run container has just one very large run
+                int lastval = BufferUtil.toIntUnsigned(getValue(vl,nbrruns + offset - 1))
+                        + BufferUtil.toIntUnsigned(getLength(vl,nbrruns + offset - 1)) + 1;
+                i.advanceIfNeeded((short) lastval);
+            }
+            while (i.hasNext()) {
+                smartAppend(vl,i.next());
+            }
+        } else {
+            while (rlepos < nbrruns) {
+                smartAppend(vl,getValue(vl,rlepos + offset), getLength(vl,rlepos + offset));
+                rlepos++;
+            }
+        }
+        return convertToLazyBitmapIfNeeded();
+    }
+
+    
     private MappeableContainer lazyxor(MappeableArrayContainer x) {
         if(x.getCardinality() == 0) return this;
         if(this.nbrruns == 0) return x;
-        MappeableRunContainer answer = new MappeableRunContainer(0,ShortBuffer.allocate(2 * (this.nbrruns + x.getCardinality())));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.getCardinality())),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         ShortIterator i = x.getShortIterator();
@@ -976,12 +1060,10 @@ public final class MappeableRunContainer extends MappeableContainer implements C
             }
         }
         
-        //MappeableRunContainer rc = new MappeableRunContainer(r, Arrays.copyOf(valueslength, 2*r));
         ShortBuffer newBuf = ShortBuffer.allocate(2*maxcardinality);
-        valueslength.rewind();
         for (int i=0; i < 2*r; ++i)
-            newBuf.put( valueslength.get());
-        MappeableRunContainer rc = new MappeableRunContainer(r, newBuf);
+            newBuf.put( valueslength.get(i)); // could be optimized
+        MappeableRunContainer rc = new MappeableRunContainer(newBuf,r);
 
         rc.setLength(r - 1, (short) (BufferUtil.toIntUnsigned(rc.getLength(r - 1)) - cardinality + maxcardinality));
         return rc;
@@ -1221,8 +1303,16 @@ public final class MappeableRunContainer extends MappeableContainer implements C
     short getLength(int index) {
         return valueslength.get(2*index + 1);
     }
+    
+    static short getValue(short[] vl, int index) {
+        return vl[2*index];
+    }
 
-      private void incrementLength(int index) {
+    static short getLength(short[] vl, int index) {
+        return vl[2*index + 1];
+    }
+
+    private void incrementLength(int index) {
           valueslength.put(2*index + 1, (short) (1 + valueslength.get(2*index+1))); 
     }
     
@@ -1344,8 +1434,12 @@ public final class MappeableRunContainer extends MappeableContainer implements C
 
 
     private void copyValuesLength(ShortBuffer src, int srcIndex, ShortBuffer dst, int dstIndex, int length) {
+        if(BufferUtil.isBackedBySimpleArray(src) && BufferUtil.isBackedBySimpleArray(dst)) {
+            // common case.
+            System.arraycopy(src.array(), 2*srcIndex, dst.array(), 2*dstIndex, 2*length);
+            return;
+        }
         // source and destination may overlap
-        //System.arraycopy(src, 2*srcIndex, dst, 2*dstIndex, 2*length);
         // consider specialized code for various cases, rather than using a second buffer
         ShortBuffer temp = ShortBuffer.allocate(2*length);
         for (int i=0; i < 2*length; ++i)
@@ -1360,7 +1454,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
 
     @Override
     public MappeableContainer and(MappeableRunContainer x) {
-        MappeableRunContainer answer = new MappeableRunContainer(0,        ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         int xrlepos = 0;
@@ -1425,7 +1519,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
 
     @Override
     public MappeableContainer andNot(MappeableRunContainer x) {
-        MappeableRunContainer answer = new MappeableRunContainer(0,ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         int xrlepos = 0;
@@ -1484,7 +1578,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
 
     private MappeableRunContainer lazyandNot(MappeableArrayContainer x) {
         if(x.getCardinality() == 0) return this;
-        MappeableRunContainer answer = new MappeableRunContainer(0,ShortBuffer.allocate(2 * (this.nbrruns + x.cardinality)));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.cardinality)),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         int xrlepos = 0;
@@ -1564,8 +1658,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
         final int offset = Math.max(nbrruns, xnbrruns);
 
         // Push all values length to the end of the array (resize array if needed)
-        ensureCapacity(offset + nbrruns);
-        copyValuesLength(this.valueslength, 0, this.valueslength, offset, nbrruns);
+        copyToOffset(offset);
 
         // Aggregate and store the result at the beginning of the array
         this.nbrruns = 0;
@@ -1575,9 +1668,9 @@ public final class MappeableRunContainer extends MappeableContainer implements C
 
         // Add values length (smaller first)
         while ((rlepos < nbrruns) && (xrlepos < xnbrruns)) {
-            final short value = this.getValue(offset + rlepos);
+            final short value = getValue(vl,offset + rlepos);
             final short xvalue = x.getValue(xrlepos);
-            final short length = this.getLength(offset + rlepos);
+            final short length = getLength(vl,offset + rlepos);
             final short xlength = x.getLength(xrlepos);
 
             if(BufferUtil.compareUnsigned(value, xvalue) <= 0) {
@@ -1589,7 +1682,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
             }
         }
         while (rlepos < nbrruns) {
-            this.smartAppend(vl, getValue(offset + rlepos), getLength(offset + rlepos));
+            this.smartAppend(vl, getValue(vl,offset + rlepos), getLength(vl,offset + rlepos));
             ++rlepos;
         }
         while (xrlepos < xnbrruns) {
@@ -1745,7 +1838,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
         if(isFull()) return clone();
         if(x.isFull()) return x.clone(); // cheap case that can save a lot of computation
         // we really ought to optimize the rest of the code for the frequent case where there is a single run
-        MappeableRunContainer answer = new MappeableRunContainer(0,ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         int xrlepos = 0;
@@ -1774,7 +1867,7 @@ public final class MappeableRunContainer extends MappeableContainer implements C
     public MappeableContainer xor(MappeableRunContainer x) {
         if(x.nbrruns == 0) return this.clone();
         if(this.nbrruns == 0) return x.clone();
-        MappeableRunContainer answer = new MappeableRunContainer(0,ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)));
+        MappeableRunContainer answer = new MappeableRunContainer(ShortBuffer.allocate(2 * (this.nbrruns + x.nbrruns)),0);
         short[] vl = answer.valueslength.array();
         int rlepos = 0;
         int xrlepos = 0;

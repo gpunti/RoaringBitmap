@@ -17,7 +17,7 @@ import org.roaringbitmap.ZipRealDataRetriever;
 
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-public class SlowORaggregate {
+public class SlowORaggregate2 {
 
     @Benchmark
     public RoaringBitmap RoaringWithRun(BenchmarkState benchmarkState) {
@@ -30,7 +30,7 @@ public class SlowORaggregate {
     @State(Scope.Benchmark)
     public static class BenchmarkState {
         @Param ({// putting the data sets in alpha. order
-             "wikileaks-noquotes",
+             "census1881_srt",
         })
         String dataset;
 
