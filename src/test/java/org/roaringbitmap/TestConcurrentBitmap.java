@@ -22,8 +22,8 @@ import org.junit.Test;
 public class TestConcurrentBitmap {
 
     public final static int NUM_THREADS = Runtime.getRuntime().availableProcessors();
-    public final static int NUM_ITERATIONS = 10000000;
-    public final static int NUM_RANGE = 100000000;
+    public final static int NUM_ITERATIONS = 1000000;
+    public final static int NUM_RANGE = 10000000;
     public final int DENSITY_PERCENTAGE = 30;
 
     private final Logger logger = Logger.getLogger(getClass().getName());
