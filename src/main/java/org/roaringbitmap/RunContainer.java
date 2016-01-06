@@ -4,7 +4,11 @@
  */
 package org.roaringbitmap;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
 import java.util.Arrays;
 import java.util.Iterator;
 
@@ -35,7 +39,7 @@ public final class RunContainer extends Container implements Cloneable {
         this.valueslength = Arrays.copyOf(valueslength, valueslength.length);
     }
 
-    
+    @Override
     public String toString() {
         StringBuffer sb = new StringBuffer();
         for(int k = 0; k < this.nbrruns; ++k) {
@@ -71,6 +75,7 @@ public final class RunContainer extends Container implements Cloneable {
 
 
     // lower-level specialized implementations might be faster
+    // unused method, can be used as part of unit testing
     protected RunContainer( ShortIterator sIt, int nbrRuns) {
         this.nbrruns = nbrRuns;
         valueslength = new short[ 2*nbrRuns];
@@ -81,6 +86,31 @@ public final class RunContainer extends Container implements Cloneable {
         int runCount=0;
         while (sIt.hasNext()) {
             int curVal = Util.toIntUnsigned(sIt.next());
+            if (curVal == prevVal+1)
+                ++runLen;
+            else {
+                if (runCount > 0)
+                    setLength(runCount-1, (short) runLen); 
+                setValue(runCount, (short) curVal);
+                runLen=0;
+                ++runCount;
+            }
+            prevVal = curVal;
+        }
+        setLength(runCount-1, (short) runLen);
+    }
+
+    protected RunContainer( ArrayContainer arr, int nbrRuns) {
+        this.nbrruns = nbrRuns;
+        valueslength = new short[ 2*nbrRuns];
+        if (nbrRuns == 0) return;
+
+        int prevVal = -2; 
+        int runLen=0;
+        int runCount=0;
+        
+        for (int i = 0; i < arr.cardinality; i++) {
+            int curVal = Util.toIntUnsigned(arr.content[i]);
             if (curVal == prevVal+1)
                 ++runLen;
             else {
@@ -116,7 +146,7 @@ public final class RunContainer extends Container implements Cloneable {
             int localRunStart = Long.numberOfTrailingZeros(curWord);
             int runStart = localRunStart   + 64*longCtr;
             // stuff 1s into number's LSBs
-            long curWordWith1s = curWord | ((1L << runStart) - 1);
+            long curWordWith1s = curWord | (curWord - 1);
             
             // find the next 0, potentially in a later word
             int runEnd = 0;
@@ -125,7 +155,7 @@ public final class RunContainer extends Container implements Cloneable {
             
             if (curWordWith1s == -1L) {
                 // a final unterminated run of 1s (32 of them)
-                runEnd = Long.numberOfTrailingZeros(~curWordWith1s) + longCtr*64;
+                runEnd = 64 + longCtr*64;
                 setValue(runCount, (short) runStart);
                 setLength(runCount, (short) (runEnd-runStart-1));
                 return;
@@ -136,8 +166,7 @@ public final class RunContainer extends Container implements Cloneable {
             setLength(runCount, (short) (runEnd-runStart-1));
             runCount++;
             // now, zero out everything right of runEnd.
-            
-            curWord = (curWordWith1s >>> localRunEnd) << localRunEnd;
+            curWord = curWordWith1s & (curWordWith1s + 1);
             // We've lathered and rinsed, so repeat...
         }
     }
@@ -232,21 +261,13 @@ public final class RunContainer extends Container implements Cloneable {
 
 
     /** 
-     *  Convert to Array or Bitmap container if the serialized form would be shorter
+     *  Convert to Array or Bitmap container if the serialized form would be shorter.
+     *  Exactly the same functionality as toEfficientContainer.
      */
 
     @Override
     public Container runOptimize() {
-        int currentSize = serializedSizeInBytes();
-        int card = getCardinality(); 
-        if (card <= ArrayContainer.DEFAULT_MAX_SIZE) {
-            if (currentSize > ArrayContainer.serializedSizeInBytes(card))
-                return toBitmapOrArrayContainer(card);
-        }
-        else if (currentSize > BitmapContainer.serializedSizeInBytes(card)) {
-            return toBitmapOrArrayContainer(card);
-        }
-        return this;
+        return toEfficientContainer();
     }
 
     private void increaseCapacity() {
@@ -359,6 +380,7 @@ public final class RunContainer extends Container implements Cloneable {
     @Override
     public Container add(short k) {
         // TODO: it might be better and simpler to do return toBitmapOrArrayContainer(getCardinality()).add(k)
+        // but note that some unit tests use this method to build up test runcontainers without calling runOptimize
         int index = unsignedInterleavedBinarySearch(valueslength, 0, nbrruns, k);
         if(index >= 0) return this;// already there
         index = - index - 2;// points to preceding value, possibly -1
@@ -441,7 +463,33 @@ public final class RunContainer extends Container implements Cloneable {
         return ac;
     }
 
-
+    @Override
+    public int andCardinality(ArrayContainer x) {
+        if(this.nbrruns == 0) return x.cardinality;
+        int rlepos = 0;
+        int arraypos = 0;
+        int andCardinality=0;
+        int rleval = Util.toIntUnsigned(this.getValue(rlepos));
+        int rlelength = Util.toIntUnsigned(this.getLength(rlepos));        
+        while(arraypos < x.cardinality)  {
+            int arrayval = Util.toIntUnsigned(x.content[arraypos]);
+            while(rleval + rlelength < arrayval) {// this will frequently be false
+                ++rlepos;
+                if(rlepos == this.nbrruns) {
+                    return andCardinality;// we are done
+                }
+                rleval = Util.toIntUnsigned(this.getValue(rlepos));
+                rlelength = Util.toIntUnsigned(this.getLength(rlepos));
+            }
+            if(rleval > arrayval)  {
+                arraypos = Util.advanceUntil(x.content,arraypos,x.cardinality,this.getValue(rlepos));
+            } else {
+            	andCardinality++;
+                arraypos++;
+            }
+        }
+        return andCardinality;
+    }
 
     @Override
     public Container and(BitmapContainer x) {
@@ -449,6 +497,7 @@ public final class RunContainer extends Container implements Cloneable {
         int card = this.getCardinality();
         if (card <=  ArrayContainer.DEFAULT_MAX_SIZE) {
             // result can only be an array (assuming that we never make a RunContainer)
+            if(card > x.cardinality) card = x.cardinality;
             ArrayContainer answer = new ArrayContainer(card);
             answer.cardinality=0;
             for (int rlepos=0; rlepos < this.nbrruns; ++rlepos) {
@@ -477,6 +526,21 @@ public final class RunContainer extends Container implements Cloneable {
         else return answer.toArrayContainer();
     }
 
+    @Override
+    public int andCardinality(BitmapContainer x) {
+        // could be implemented as return toBitmapOrArrayContainer().iand(x);
+        int cardinality=0;
+        for (int rlepos=0; rlepos < this.nbrruns; ++rlepos) {
+            int runStart = Util.toIntUnsigned(this.getValue(rlepos));
+            int runEnd = runStart + Util.toIntUnsigned(this.getLength(rlepos));
+            for (int runValue = runStart; runValue <= runEnd; ++runValue) {
+                if ( x.contains((short) runValue)) {// it looks like contains() should be cheap enough if accessed sequentially
+                    cardinality++;
+                }
+            }
+        }
+        return cardinality;
+    }
 
     @Override
     public Container andNot(BitmapContainer x) {
@@ -559,6 +623,10 @@ public final class RunContainer extends Container implements Cloneable {
         return false;
     }
 
+
+
+
+
     @Override
     public void deserialize(DataInput in) throws IOException {
         nbrruns = Short.reverseBytes(in.readShort());
@@ -609,6 +677,15 @@ public final class RunContainer extends Container implements Cloneable {
         return this.nbrruns * 4 + 4;
     }
 
+
+    @Override
+    public int hashCode() {
+        int hash = 0;
+        for (int k = 0; k < nbrruns * 2; ++k)
+            hash += 31 * hash + valueslength[k];
+        return hash;
+    }
+    
     @Override
     public Container iand(ArrayContainer x) {
         return and(x);
@@ -631,9 +708,93 @@ public final class RunContainer extends Container implements Cloneable {
 
     @Override
     public Container inot(int rangeStart, int rangeEnd) {
-        if (rangeEnd <= rangeStart) return this;  
-        else
-            return not( rangeStart, rangeEnd);  // TODO: inplace option?
+        if (rangeEnd <= rangeStart) return this; 
+
+        // TODO: write special case code for rangeStart=0; rangeEnd=65535
+        // a "sliding" effect where each range records the gap adjacent it
+        // can probably be quite fast.  Probably have 2 cases: start with a
+        // 0 run vs start with a 1 run.  If you both start and end with 0s,
+        // you will require room for expansion.
+        
+        // the +1 below is needed in case the valueslength.length is odd
+        if (valueslength.length <= 2*nbrruns+1)  {
+            // no room for expansion
+            // analyze whether this is a case that will require expansion (that we cannot do) 
+            // this is a bit costly now (4 "contains" checks)
+            
+            boolean lastValueBeforeRange= false;
+            boolean firstValueInRange = false;
+            boolean lastValueInRange = false;
+            boolean firstValuePastRange = false;
+
+            // contains is based on a binary search and is hopefully fairly fast.
+            // however, one binary search could *usually* suffice to find both
+            // lastValueBeforeRange AND firstValueInRange.  ditto for
+            // lastVaueInRange and firstValuePastRange
+
+            // find the start of the range
+            if (rangeStart > 0)
+                lastValueBeforeRange = contains( (short) (rangeStart-1));
+            firstValueInRange = contains( (short) rangeStart);
+            
+            if (lastValueBeforeRange == firstValueInRange) {
+                // expansion is required if also lastValueInRange==firstValuePastRange
+                
+                // tougher to optimize out, but possible.
+                lastValueInRange = contains( (short) (rangeEnd-1));
+                if (rangeEnd != 65536)
+                    firstValuePastRange = contains( (short) rangeEnd);
+                
+                // there is definitely one more run after the operation.
+                if (lastValueInRange==firstValuePastRange)  {
+                    return not( rangeStart, rangeEnd);  // can't do in-place: true space limit
+                }
+            }
+        }
+        // either no expansion required, or we have room to handle any required expansion for it.
+        
+        // remaining code is just a minor variation on not()
+        int myNbrRuns = nbrruns;
+
+        RunContainer ans = this;  // copy on top of self.  
+        int k = 0;
+        ans.nbrruns=0;  // losing this.nbrruns, which is stashed in myNbrRuns.
+
+        //could try using unsignedInterleavedBinarySearch(valueslength, 0, nbrruns, rangeStart) instead of sequential scan
+        //to find the starting location
+
+        for(; (k < myNbrRuns) && ((Util.toIntUnsigned(this.getValue(k)) < rangeStart)) ; ++k) {
+            // since it is atop self, there is no copying needed
+            //ans.valueslength[2 * k] = this.valueslength[2 * k];
+            //ans.valueslength[2 * k + 1] = this.valueslength[2 * k + 1];
+                ans.nbrruns++;
+        }
+        // We will work left to right, with a read pointer that always stays
+        // left of the write pointer.  However, we need to give the read pointer a head start.
+        // use local variables so we are always reading 1 location ahead.
+
+        short bufferedValue = 0, bufferedLength = 0;  // 65535 start and 65535 length would be illegal, could use as sentinel
+        short nextValue=0, nextLength=0;
+        if (k < myNbrRuns) {  // prime the readahead variables
+            bufferedValue = getValue(k);
+            bufferedLength = getLength(k);
+        }
+
+        ans.smartAppendExclusive((short)rangeStart,(short)(rangeEnd-rangeStart-1));
+        
+        for (; k < myNbrRuns; ++k) {
+            if (ans.nbrruns > k+1)
+                throw new RuntimeException("internal error in inot, writer has overtaken reader!! "+ k + " " + ans.nbrruns);
+            if (k+1 < myNbrRuns) {
+                nextValue = getValue(k+1);  // readahead for next iteration
+                nextLength= getLength(k+1);
+            }
+            ans.smartAppendExclusive(bufferedValue, bufferedLength);
+            bufferedValue = nextValue; bufferedLength = nextLength;
+        }
+        // the number of runs can increase by one, meaning (rarely) a bitmap will become better
+        // or the cardinality can decrease by a lot, making an array better
+        return ans.toEfficientContainer();
     }
 
     @Override
@@ -654,12 +815,12 @@ public final class RunContainer extends Container implements Cloneable {
             }
         }        
         if (i.hasNext()) {
-            if(this.nbrruns>0) {
+            /*if(this.nbrruns>0) {
                 // this might be useful if the run container has just one very large run
                 int lastval = Util.toIntUnsigned(getValue(nbrruns + offset - 1))
                         + Util.toIntUnsigned(getLength(nbrruns + offset - 1)) + 1;
                 i.advanceIfNeeded((short) lastval);
-            }
+            }*/
             while (i.hasNext()) {
                 smartAppend(i.next());
             }
@@ -704,7 +865,9 @@ public final class RunContainer extends Container implements Cloneable {
         for(; k < this.nbrruns ; ++k) {
             ans.smartAppendExclusive(getValue(k), getLength(k));
         }
-        return ans;
+        // the number of runs can increase by one, meaning (rarely) a bitmap will become better
+        // or the cardinality can decrease by a lot, making an array better
+        return ans.toEfficientContainer();
     }
         
 
@@ -737,19 +900,23 @@ public final class RunContainer extends Container implements Cloneable {
         while (i.hasNext() && (rlepos < this.nbrruns) ) {
             if(Util.compareUnsigned(getValue(rlepos), i.peekNext()) <= 0) {
                 answer.smartAppend(getValue(rlepos), getLength(rlepos));
-                // here we could call i.advanceIfNeeded(minval);
+                // in theory, this next code could help, in practice it doesn't.
+                /*int lastval = Util.toIntUnsigned(answer.getValue(answer.nbrruns - 1))
+                        + Util.toIntUnsigned(answer.getLength(answer.nbrruns - 1)) + 1;
+                i.advanceIfNeeded((short) lastval);*/
+
                 rlepos++;
             } else {
                 answer.smartAppend(i.next());
             }
         }        
         if (i.hasNext()) {
-            if(answer.nbrruns>0) {
-                // this might be useful if the run container has just one very large run
-                int lastval = Util.toIntUnsigned(answer.getValue(answer.nbrruns - 1))
-                        + Util.toIntUnsigned(answer.getLength(answer.nbrruns - 1)) + 1;
+            /*if(answer.nbrruns>0) {
+                 this might be useful if the run container has just one very large run
+                  int lastval = Util.toIntUnsigned(answer.getValue(answer.nbrruns - 1))
+                          + Util.toIntUnsigned(answer.getLength(answer.nbrruns - 1)) + 1;
                 i.advanceIfNeeded((short) lastval);
-            }
+            }*/
             while (i.hasNext()) {
                 answer.smartAppend(i.next());
             }
@@ -779,12 +946,12 @@ public final class RunContainer extends Container implements Cloneable {
             }
         }        
         if (i.hasNext()) {
-            if(this.nbrruns>0) {
+            /*if(this.nbrruns>0) {
                 // this might be useful if the run container has just one very large run
                 int lastval = Util.toIntUnsigned(getValue(nbrruns + offset - 1))
                         + Util.toIntUnsigned(getLength(nbrruns + offset - 1)) + 1;
                 i.advanceIfNeeded((short) lastval);
-            }
+            }*/
             while (i.hasNext()) {
                 smartAppend(i.next());
             }
@@ -923,7 +1090,7 @@ public final class RunContainer extends Container implements Cloneable {
             // if the cardinality is small, we construct the solution in place
             return x.xor(this.getShortIterator());
         }
-        // otherwise, we generate a bitmap
+        // otherwise, we generate a bitmap (even if runcontainer would be better)
         return toBitmapOrArrayContainer(card).ixor(x);
     }
 
@@ -1222,8 +1389,16 @@ public final class RunContainer extends Container implements Cloneable {
         return false;
     }
 
-
     private static int unsignedInterleavedBinarySearch(final short[] array,
+            final int begin, final int end, final short k) {
+        if(Util.USE_HYBRID_BINSEARCH)
+            return hybridUnsignedInterleavedBinarySearch(array,begin,end,k);
+        else 
+            return branchyUnsignedInterleavedBinarySearch(array,begin,end,k);
+        
+    }
+
+    private static int branchyUnsignedInterleavedBinarySearch(final short[] array,
             final int begin, final int end, final short k) {
         int ikey = Util.toIntUnsigned(k);
         int low = begin;
@@ -1240,6 +1415,36 @@ public final class RunContainer extends Container implements Cloneable {
         }
         return -(low + 1);
     }
+    
+    // starts with binary search and finishes with a sequential search
+    private static int hybridUnsignedInterleavedBinarySearch(final short[] array,
+            final int begin, final int end, final short k) {
+        int ikey = Util.toIntUnsigned(k);
+        int low = begin;
+        int high = end - 1;
+        // 16 in the next line matches the size of a cache line
+        while (low + 16 <= high) {
+            final int middleIndex = (low + high) >>> 1;
+            final int middleValue = Util.toIntUnsigned(array[2 * middleIndex]);
+            if (middleValue < ikey)
+                low = middleIndex + 1;
+            else if (middleValue > ikey)
+                high = middleIndex - 1;
+            else
+                return middleIndex;
+        }
+        // we finish the job with a sequential search 
+        int x = low;
+        for(; x <= high; ++x) {
+            final int val = Util.toIntUnsigned(array[2*x]);
+            if(val >= ikey) {
+                if(val == ikey) return x;
+                break;
+            }
+        }
+        return -(x + 1);
+    }    
+
 
     short getValue(int index) {
         return valueslength[2*index];
@@ -1479,7 +1684,76 @@ public final class RunContainer extends Container implements Cloneable {
         return answer.toEfficientContainer();  // subsequent trim() may be required to avoid wasted space.
     }
 
+    @Override
+    public int andCardinality(RunContainer x) {
+        int cardinality=0;
+        int rlepos = 0;
+        int xrlepos = 0;
+        int start = Util.toIntUnsigned(this.getValue(rlepos));
+        int end = start + Util.toIntUnsigned(this.getLength(rlepos)) + 1;
+        int xstart = Util.toIntUnsigned(x.getValue(xrlepos));
+        int xend = xstart + Util.toIntUnsigned(x.getLength(xrlepos)) + 1;
+        while ((rlepos < this.nbrruns ) && (xrlepos < x.nbrruns )) {
+            if (end  <= xstart) {
+                if (ENABLE_GALLOPING_AND) {
+                    rlepos = skipAhead(this, rlepos, xstart); // skip over runs until we have end > xstart  (or rlepos is advanced beyond end)
+                }
+                else
+                    ++rlepos;
 
+                if(rlepos < this.nbrruns ) {
+                    start = Util.toIntUnsigned(this.getValue(rlepos));
+                    end = start + Util.toIntUnsigned(this.getLength(rlepos)) + 1;
+                }
+            } else if (xend <= start) {
+                // exit the second run
+                if (ENABLE_GALLOPING_AND) {
+                    xrlepos = skipAhead(x, xrlepos, start);
+                }
+                else
+                    ++xrlepos;
+
+                if(xrlepos < x.nbrruns ) {
+                    xstart = Util.toIntUnsigned(x.getValue(xrlepos));
+                    xend = xstart + Util.toIntUnsigned(x.getLength(xrlepos)) + 1;
+                }
+            } else {// they overlap
+                final int lateststart = start > xstart ? start : xstart;
+                int earliestend;
+                if(end == xend) {// improbable
+                    earliestend = end;
+                    rlepos++;
+                    xrlepos++;
+                    if(rlepos < this.nbrruns ) {
+                        start = Util.toIntUnsigned(this.getValue(rlepos));
+                        end = start + Util.toIntUnsigned(this.getLength(rlepos)) + 1;
+                    }
+                    if(xrlepos < x.nbrruns) {
+                        xstart = Util.toIntUnsigned(x.getValue(xrlepos));
+                        xend = xstart + Util.toIntUnsigned(x.getLength(xrlepos)) + 1;
+                    }
+                } else if(end < xend) {
+                    earliestend = end;
+                    rlepos++;
+                    if(rlepos < this.nbrruns ) {
+                        start = Util.toIntUnsigned(this.getValue(rlepos));
+                        end = start + Util.toIntUnsigned(this.getLength(rlepos)) + 1;
+                    }
+
+                } else {// end > xend
+                    earliestend = xend;
+                    xrlepos++;
+                    if(xrlepos < x.nbrruns) {
+                        xstart = Util.toIntUnsigned(x.getValue(xrlepos));
+                        xend = xstart + Util.toIntUnsigned(x.getLength(xrlepos)) + 1;
+                    }                
+                }
+                //earliestend - lateststart are all values that are true.
+                cardinality += (short) (earliestend - lateststart);
+            }
+        }
+        return cardinality;
+  }
 
 
 
@@ -1859,6 +2133,86 @@ public final class RunContainer extends Container implements Cloneable {
             return answer;
         }
         return this;
+    }
+
+    @Override
+    public boolean intersects(ArrayContainer x) {
+        if(this.nbrruns == 0) return false;
+        int rlepos = 0;
+        int arraypos = 0;
+        int rleval = Util.toIntUnsigned(this.getValue(rlepos));
+        int rlelength = Util.toIntUnsigned(this.getLength(rlepos));        
+        while(arraypos < x.cardinality)  {
+            int arrayval = Util.toIntUnsigned(x.content[arraypos]);
+            while(rleval + rlelength < arrayval) {// this will frequently be false
+                ++rlepos;
+                if(rlepos == this.nbrruns) {
+                    return false;
+                }
+                rleval = Util.toIntUnsigned(this.getValue(rlepos));
+                rlelength = Util.toIntUnsigned(this.getLength(rlepos));
+            }
+            if(rleval > arrayval)  {
+                arraypos = Util.advanceUntil(x.content,arraypos,x.cardinality,this.getValue(rlepos));
+            } else {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean intersects(BitmapContainer x) {
+        // TODO: this is probably not optimally fast
+        for (int rlepos=0; rlepos < this.nbrruns; ++rlepos) {
+            int runStart = Util.toIntUnsigned(this.getValue(rlepos));
+            int runEnd = runStart + Util.toIntUnsigned(this.getLength(rlepos));
+            for (int runValue = runStart; runValue <= runEnd; ++runValue) {
+                if ( x.contains((short) runValue)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean intersects(RunContainer x) {
+        int rlepos = 0;
+        int xrlepos = 0;
+        int start = Util.toIntUnsigned(this.getValue(rlepos));
+        int end = start + Util.toIntUnsigned(this.getLength(rlepos)) + 1;
+        int xstart = Util.toIntUnsigned(x.getValue(xrlepos));
+        int xend = xstart + Util.toIntUnsigned(x.getLength(xrlepos)) + 1;
+        while ((rlepos < this.nbrruns ) && (xrlepos < x.nbrruns )) {
+            if (end  <= xstart) {
+                if (ENABLE_GALLOPING_AND) {
+                    rlepos = skipAhead(this, rlepos, xstart); // skip over runs until we have end > xstart  (or rlepos is advanced beyond end)
+                }
+                else
+                    ++rlepos;
+
+                if(rlepos < this.nbrruns ) {
+                    start = Util.toIntUnsigned(this.getValue(rlepos));
+                    end = start + Util.toIntUnsigned(this.getLength(rlepos)) + 1;
+                }
+            } else if (xend <= start) {
+                // exit the second run
+                if (ENABLE_GALLOPING_AND) {
+                    xrlepos = skipAhead(x, xrlepos, start);
+                }
+                else
+                    ++xrlepos;
+
+                if(xrlepos < x.nbrruns ) {
+                    xstart = Util.toIntUnsigned(x.getValue(xrlepos));
+                    xend = xstart + Util.toIntUnsigned(x.getLength(xrlepos)) + 1;
+                }
+            } else {// they overlap
+                return true;
+            }
+        }
+        return false;
     }
 
 }

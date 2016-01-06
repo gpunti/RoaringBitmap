@@ -11,6 +11,8 @@ import java.nio.LongBuffer;
 import java.nio.ShortBuffer;
 import java.util.Arrays;
 
+import org.roaringbitmap.Util;
+
 
 /**
  * Specialized array to store the containers used by a RoaringBitmap. This class
@@ -87,10 +89,10 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
      */
     protected void appendCopiesUntil(PointableRoaringArray highLowContainer,
             short stoppingKey) {
-    	final int stopKey = BufferUtil.toIntUnsigned(stoppingKey);
+        final int stopKey = BufferUtil.toIntUnsigned(stoppingKey);
         MappeableContainerPointer cp = highLowContainer.getContainerPointer();
         while (cp.hasContainer()) {
-        	if (BufferUtil.toIntUnsigned(cp.key()) >= stopKey)
+            if (BufferUtil.toIntUnsigned(cp.key()) >= stopKey)
                 break;
             extendArray(1);
             this.keys[this.size] = cp.key();
@@ -128,22 +130,7 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
     }
 
     private int binarySearch(int begin, int end, short key) {
-        int low = begin;
-        int high = end - 1;
-        final int ikey = BufferUtil.toIntUnsigned(key);
-
-        while (low <= high) {
-            final int middleIndex = (low + high) >>> 1;
-            final int middleValue = BufferUtil.toIntUnsigned(keys[middleIndex]);
-
-            if (middleValue < ikey)
-                low = middleIndex + 1;
-            else if (middleValue > ikey)
-                high = middleIndex - 1;
-            else
-                return middleIndex;
-        }
-        return -(low + 1);
+        return Util.unsignedBinarySearch(keys, begin, end, key);
     }
 
     protected void clear() {
@@ -268,21 +255,25 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
     }
 
     // involves a binary search
+    @Override
     public MappeableContainer getContainer(short x) {
         final int i = this.binarySearch(0, size, x);
         if (i < 0)
             return null;
         return this.values[i];
     }
-
+    
+    @Override
     public MappeableContainer getContainerAtIndex(int i) {
         return this.values[i];
     }
 
+    @Override
     public MappeableContainerPointer getContainerPointer() {
         return getContainerPointer(0);
     }
 
+    @Override
     public MappeableContainerPointer getContainerPointer(final int startIndex) {
         return new MappeableContainerPointer() {
             int k = startIndex;
@@ -298,12 +289,12 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
             }
 
             @Override
-			public int compareTo(MappeableContainerPointer o) {
-				if (key() != o.key())
-					return BufferUtil.toIntUnsigned(key())
-							- BufferUtil.toIntUnsigned(o.key());
+            public int compareTo(MappeableContainerPointer o) {
+                if (key() != o.key())
+                    return BufferUtil.toIntUnsigned(key())
+                            - BufferUtil.toIntUnsigned(o.key());
                 return o.getCardinality() - this.getCardinality();
-			}
+            }
 
             @Override
             public int getCardinality() {
@@ -357,6 +348,7 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
     }
 
     // involves a binary search
+    @Override
     public int getIndex(short x) {
         // before the binary search, we optimize for frequent cases
         if ((size == 0) || (keys[size - 1] == x))
@@ -365,10 +357,12 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
         return this.binarySearch(0, size, x);
     }
 
+    @Override
     public short getKeyAtIndex(int i) {
         return this.keys[i];
     }
-
+    
+    @Override
     public int advanceUntil(short x, int pos) {
         int lower = pos + 1;
 
@@ -489,6 +483,7 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
      * @throws IOException
      *             Signals that an I/O exception has occurred.
      */
+    @Override
     public void serialize(DataOutput out) throws IOException {
         int startOffset=0;
         boolean hasrun = hasRunCompression();
@@ -532,6 +527,7 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
      *
      * @return the size in bytes
      */
+    @Override
     public int serializedSizeInBytes() {
         int count = headerSize();
         // for each container, we store cardinality (16 bits), key (16 bits) and location offset (32 bits).
@@ -562,6 +558,7 @@ public final class MutableRoaringArray implements Cloneable, Externalizable,
         this.values[i] = c;
     }
 
+    @Override
     public int size() {
         return this.size;
     }

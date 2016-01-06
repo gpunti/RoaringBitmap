@@ -68,9 +68,10 @@ public final class Util {
         // invariant: array[lower]<min && array[upper]>min
         while (lower + 1 != upper) {
             int mid = (lower + upper) / 2;
-            if (array[mid] == min) {
+            short arraymid = array[mid];
+            if (arraymid == min) {
                 return mid;
-            } else if (toIntUnsigned(array[mid]) < toIntUnsigned(min))
+            } else if (toIntUnsigned(arraymid) < toIntUnsigned(min))
                 lower = mid;
             else
                 upper = mid;
@@ -183,10 +184,58 @@ public final class Util {
      * @return count
      */
     public static int unsignedBinarySearch(final short[] array, final int begin,
-                                              final int end, final short k) {
+            final int end,  final short k) {
+        if(USE_HYBRID_BINSEARCH)
+          return hybridUnsignedBinarySearch(array,begin,end, k);
+        else 
+          return branchyUnsignedBinarySearch(array,begin,end, k);
+    }
+    
+    // optimization flag: whether to use hybrid binary search: hybrid formats
+    // combine a binary search with a sequential search 
+    public static boolean USE_HYBRID_BINSEARCH = true;
+    
+    // starts with binary search and finishes with a sequential search
+    protected static int hybridUnsignedBinarySearch(final short[] array,
+            final int begin, final int end, final short k) {
         int ikey = toIntUnsigned(k);
-        // next line accelerates the possibly common case where the value would be inserted at the end
-        if((end>0) && (toIntUnsigned(array[end-1]) < ikey)) return - end - 1;
+        // next line accelerates the possibly common case where the value would
+        // be inserted at the end
+        if ((end > 0) && (toIntUnsigned(array[end - 1]) < ikey))
+            return -end - 1;
+        int low = begin;
+        int high = end - 1;
+        // 32 in the next line matches the size of a cache line
+        while (low + 32 <= high) {
+            final int middleIndex = (low + high) >>> 1;
+            final int middleValue = toIntUnsigned(array[middleIndex]);
+
+            if (middleValue < ikey)
+                low = middleIndex + 1;
+            else if (middleValue > ikey)
+                high = middleIndex - 1;
+            else
+                return middleIndex;
+        }
+        // we finish the job with a sequential search 
+        int x = low;
+        for(; x <= high; ++x) {
+            final int val = toIntUnsigned(array[x]);
+            if(val >= ikey) {
+                if(val == ikey) return x;
+                break;
+            }
+        }
+        return -(x + 1);
+    }
+
+    protected static int branchyUnsignedBinarySearch(final short[] array,
+            final int begin, final int end, final short k) {
+        int ikey = toIntUnsigned(k);
+        // next line accelerates the possibly common case where the value would
+        // be inserted at the end
+        if ((end > 0) && (toIntUnsigned(array[end - 1]) < ikey))
+            return -end - 1;
         int low = begin;
         int high = end - 1;
         while (low <= high) {
@@ -202,7 +251,7 @@ public final class Util {
         }
         return -(low + 1);
     }
-
+    
     /**
      * Compute the difference between two sorted lists and write the result to the provided
      * output array
@@ -226,29 +275,35 @@ public final class Util {
         if (0 == length1) {
             return 0;
         }
+        short s1 = set1[k1];
+        short s2 = set2[k2];
         while (true) {
-            if (toIntUnsigned(set1[k1]) < toIntUnsigned(set2[k2])) {
-                buffer[pos++] = set1[k1];
+            if (toIntUnsigned(s1) < toIntUnsigned(s2)) {
+                buffer[pos++] = s1;
                 ++k1;
                 if (k1 >= length1) {
                     break;
                 }
-            } else if (toIntUnsigned(set1[k1]) == toIntUnsigned(set2[k2])) {
+                s1 = set1[k1];
+            } else if (toIntUnsigned(s1) == toIntUnsigned(s2)) {
                 ++k1;
                 ++k2;
                 if (k1 >= length1) {
                     break;
                 }
                 if (k2 >= length2) {
-                	System.arraycopy(set1, k1, buffer, pos, length1-k1);
-                	return pos + length1 - k1;
+                    System.arraycopy(set1, k1, buffer, pos, length1-k1);
+                    return pos + length1 - k1;
                 }
+                s1 = set1[k1];
+                s2 = set2[k2];
             } else {// if (val1>val2)
                 ++k2;
                 if (k2 >= length2) {
-                	System.arraycopy(set1, k1, buffer, pos, length1-k1);
-                	return pos + length1 - k1;
+                    System.arraycopy(set1, k1, buffer, pos, length1-k1);
+                    return pos + length1 - k1;
                 }
+                s2 = set2[k2];
             }
         }
         return pos;
@@ -330,32 +385,38 @@ public final class Util {
             System.arraycopy(set2, 0, buffer, 0, length2);
             return length2;
         }
+        short s1 = set1[k1];
+        short s2 = set2[k2];
         while (true) {
-            if (toIntUnsigned(set1[k1]) < toIntUnsigned(set2[k2])) {
-                buffer[pos++] = set1[k1];
+            if (toIntUnsigned(s1) < toIntUnsigned(s2)) {
+                buffer[pos++] = s1;
                 ++k1;
                 if (k1 >= length1) {
-                	System.arraycopy(set2, k2, buffer, pos, length2-k2);
-                	return pos + length2 - k2;
+                    System.arraycopy(set2, k2, buffer, pos, length2-k2);
+                    return pos + length2 - k2;
                 }
-            } else if (toIntUnsigned(set1[k1]) == toIntUnsigned(set2[k2])) {
+                s1 = set1[k1];
+            } else if (toIntUnsigned(s1) == toIntUnsigned(s2)) {
                 ++k1;
                 ++k2;
                 if (k1 >= length1) {
-                	System.arraycopy(set2, k2, buffer, pos, length2-k2);
-                	return pos + length2 - k2;
+                    System.arraycopy(set2, k2, buffer, pos, length2-k2);
+                    return pos + length2 - k2;
                 }
                 if (k2 >= length2) {
-                	System.arraycopy(set1, k1, buffer, pos, length1-k1);
-                	return pos + length1 - k1;
+                    System.arraycopy(set1, k1, buffer, pos, length1-k1);
+                    return pos + length1 - k1;
                 }
+                s1 = set1[k1];
+                s2 = set2[k2];
             } else {// if (val1>val2)
-                buffer[pos++] = set2[k2];
+                buffer[pos++] = s2;
                 ++k2;
                 if (k2 >= length2) {
-                	System.arraycopy(set1, k1, buffer, pos, length1-k1);
-                	return pos + length1 - k1;
+                    System.arraycopy(set1, k1, buffer, pos, length1-k1);
+                    return pos + length1 - k1;
                 }
+                s2 = set2[k2];
             }
         }
         //return pos;
@@ -392,31 +453,87 @@ public final class Util {
         int k1 = 0;
         int k2 = 0;
         int pos = 0;
+        short s1 = set1[k1];
+        short s2 = set2[k2];
 
         mainwhile:
         while (true) {
-            if (toIntUnsigned(set2[k2]) < toIntUnsigned(set1[k1])) {
+            int v1 = toIntUnsigned(s1);
+            int v2 = toIntUnsigned(s2);
+            if (v2 < v1) {
                 do {
                     ++k2;
                     if (k2 == length2)
                         break mainwhile;
-                } while (toIntUnsigned(set2[k2]) < toIntUnsigned(set1[k1]));
+                    s2 = set2[k2];
+                    v2 = toIntUnsigned(s2);
+                } while (v2 < v1);
             }
-            if (toIntUnsigned(set1[k1]) < toIntUnsigned(set2[k2])) {
+            if (v1 < v2) {
                 do {
                     ++k1;
                     if (k1 == length1)
                         break mainwhile;
-                } while (toIntUnsigned(set1[k1]) < toIntUnsigned(set2[k2]));
+                    s1 = set1[k1];
+                    v1 = toIntUnsigned(s1);
+                } while (v1 < v2);
             } else {
                 // (set2[k2] == set1[k1])
-                buffer[pos++] = set1[k1];
+                buffer[pos++] = s1;
                 ++k1;
                 if (k1 == length1)
                     break;
                 ++k2;
                 if (k2 == length2)
                     break;
+                s1 = set1[k1];
+                s2 = set2[k2];
+            }
+        }
+        return pos;
+    }
+    
+    protected static int unsignedLocalIntersect2by2Cardinality(final short[] set1, final int length1,
+            final short[] set2, final int length2) {
+        if ((0 == length1) || (0 == length2))
+            return 0;
+        int k1 = 0;
+        int k2 = 0;
+        int pos = 0;
+        short s1 = set1[k1];
+        short s2 = set2[k2];
+
+        mainwhile: while (true) {
+            int v1 = toIntUnsigned(s1);
+            int v2 = toIntUnsigned(s2);
+            if (v2 < v1) {
+                do {
+                    ++k2;
+                    if (k2 == length2)
+                        break mainwhile;
+                    s2 = set2[k2];
+                    v2 = toIntUnsigned(s2);
+                } while (v2 < v1);
+            }
+            if (v1 < v2) {
+                do {
+                    ++k1;
+                    if (k1 == length1)
+                        break mainwhile;
+                    s1 = set1[k1];
+                    v1 = toIntUnsigned(s1);
+                } while (v1 < v2);
+            } else {
+                // (set2[k2] == set1[k1])
+                pos++;
+                ++k1;
+                if (k1 == length1)
+                    break;
+                ++k2;
+                if (k2 == length2)
+                    break;
+                s1 = set1[k1];
+                s2 = set2[k2];
             }
         }
         return pos;
@@ -431,31 +548,39 @@ public final class Util {
         int k1 = 0;
         int k2 = 0;
         int pos = 0;
+        short s1 = largeSet[k1];
+        short s2 = smallSet[k2];
         while (true) {
-            if (toIntUnsigned(largeSet[k1]) < toIntUnsigned(smallSet[k2])) {
-                k1 = advanceUntil(largeSet, k1, largeLength, smallSet[k2]);
+            if (toIntUnsigned(s1) < toIntUnsigned(s2)) {
+                k1 = advanceUntil(largeSet, k1, largeLength, s2);
                 if (k1 == largeLength)
                     break;
+                s1 = largeSet[k1];
             }
-            if (toIntUnsigned(smallSet[k2]) < toIntUnsigned(largeSet[k1])) {
+            if (toIntUnsigned(s2) < toIntUnsigned(s1)) {
                 ++k2;
                 if (k2 == smallLength)
                     break;
+                s2 = smallSet[k2];
             } else {
                 // (set2[k2] == set1[k1])
-                buffer[pos++] = smallSet[k2];
+                buffer[pos++] = s2;
                 ++k2;
                 if (k2 == smallLength)
                     break;
-                k1 = advanceUntil(largeSet, k1, largeLength, smallSet[k2]);
+                s2 = smallSet[k2];
+                k1 = advanceUntil(largeSet, k1, largeLength, s2);
                 if (k1 == largeLength)
                     break;
+                s1 = largeSet[k1];
             }
 
         }
         return pos;
 
     }
+    
+
 
     /**
      * Unite two sorted lists and write the result to the provided
@@ -481,33 +606,41 @@ public final class Util {
             System.arraycopy(set2, 0, buffer, 0, length2);
             return length2;
         }
+        short s1 = set1[k1];
+        short s2 = set2[k2];
         while (true) {
-            if (toIntUnsigned(set1[k1]) < toIntUnsigned(set2[k2])) {
-                buffer[pos++] = set1[k1];
+            int v1 = toIntUnsigned(s1);
+            int v2 = toIntUnsigned(s2);
+            if (v1 < v2) {
+                buffer[pos++] = s1;
                 ++k1;
                 if (k1 >= length1) {
-                	System.arraycopy(set2, k2, buffer, pos, length2-k2);
-                	return pos + length2 - k2;
+                    System.arraycopy(set2, k2, buffer, pos, length2-k2);
+                    return pos + length2 - k2;
                 }
-            } else if (toIntUnsigned(set1[k1]) == toIntUnsigned(set2[k2])) {
-                buffer[pos++] = set1[k1];
+                s1 = set1[k1];
+            } else if (v1 == v2) {
+                buffer[pos++] = s1;
                 ++k1;
                 ++k2;
                 if (k1 >= length1) {
-                	System.arraycopy(set2, k2, buffer, pos, length2-k2);
-                	return pos + length2 - k2;
+                    System.arraycopy(set2, k2, buffer, pos, length2-k2);
+                    return pos + length2 - k2;
                 }
                 if (k2 >= length2) {
-                	System.arraycopy(set1, k1, buffer, pos, length1-k1);
-                	return pos + length1 - k1;
+                    System.arraycopy(set1, k1, buffer, pos, length1-k1);
+                    return pos + length1 - k1;
                 }
+                s1 = set1[k1];
+                s2 = set2[k2];
             } else {// if (set1[k1]>set2[k2])
-                buffer[pos++] = set2[k2];
+                buffer[pos++] = s2;
                 ++k2;
                 if (k2 >= length2) {
-                	System.arraycopy(set1, k1, buffer, pos, length1-k1);
-                	return pos + length1 - k1;
+                    System.arraycopy(set1, k1, buffer, pos, length1-k1);
+                    return pos + length1 - k1;
                 }
+                s2 = set2[k2];
             }
         }
         //return pos;
@@ -642,6 +775,49 @@ public final class Util {
      */
     public static int compareUnsigned(short a, short b) {
         return toIntUnsigned(a) -  toIntUnsigned(b);
+    }
+
+
+    /**
+     * Checks if two arrays intersect
+     *
+     * @param set1    first array
+     * @param length1 length of first array
+     * @param set2    second array
+     * @param length2 length of second array
+     * @return true if they intersect
+     */
+    public static boolean unsignedIntersects(short[] set1, int length1,
+            short[] set2, int length2) {
+        // galloping might be faster, but we do not expect this function to be slow
+        if ((0 == length1) || (0 == length2))
+            return false;
+        int k1 = 0;
+        int k2 = 0;
+        short s1 = set1[k1];
+        short s2 = set2[k2];
+        mainwhile:
+        while (true) {
+            if (toIntUnsigned(s2) < toIntUnsigned(s1)) {
+                do {
+                    ++k2;
+                    if (k2 == length2)
+                        break mainwhile;
+                    s2 = set2[k2];
+                } while (toIntUnsigned(s2) < toIntUnsigned(s1));
+            }
+            if (toIntUnsigned(s1) < toIntUnsigned(s2)) {
+                do {
+                    ++k1;
+                    if (k1 == length1)
+                        break mainwhile;
+                    s1 = set1[k1];
+                } while (toIntUnsigned(s1) < toIntUnsigned(s2));
+            } else {
+                return true;
+            }
+        }
+        return false;
     }
 
 }

@@ -42,21 +42,26 @@ public class TestImmutableRoaringBitmap {
 					mBB = mbb;
 					return this;
 				}
-
+				
+			    @Override
 				public void close() {
 				}
-
+			    
+			    @Override
 				public void flush() {
 				}
-
+			    
+			    @Override
 				public void write(final int b) {
 					mBB.put((byte) b);
 				}
-
+			    
+			    @Override
 				public void write(final byte[] b) {
 					mBB.put(b);
 				}
 
+			    @Override
 				public void write(final byte[] b, final int off, final int l) {
 					mBB.put(b, off, l);
 				}
@@ -111,21 +116,26 @@ public class TestImmutableRoaringBitmap {
 					mBB = mbb;
 					return this;
 				}
-
+				
+			    @Override
 				public void close() {
 				}
 
+			    @Override
 				public void flush() {
 				}
 
+			    @Override
 				public void write(final int b) {
 					mBB.put((byte) b);
 				}
-
+			    
+			    @Override
 				public void write(final byte[] b) {
 					mBB.put(b);
 				}
-
+			    
+			    @Override
 				public void write(final byte[] b, final int off, final int l) {
 					mBB.put(b, off, l);
 				}
@@ -209,20 +219,25 @@ public class TestImmutableRoaringBitmap {
                     return this;
                 }
 
+                @Override
                 public void close() {
                 }
 
+                @Override
                 public void flush() {
                 }
-
+                
+                @Override
                 public void write(final int b) {
                     mBB.put((byte) b);
                 }
-
+                
+                @Override
                 public void write(final byte[] b) {
                     mBB.put(b);
                 }
-
+                
+                @Override
                 public void write(final byte[] b, final int off, final int l) {
                     mBB.put(b, off, l);
                 }
@@ -257,21 +272,26 @@ public class TestImmutableRoaringBitmap {
                     mBB = mbb;
                     return this;
                 }
-
+                
+                @Override
                 public void close() {
                 }
-
+                
+                @Override
                 public void flush() {
                 }
 
+                @Override
                 public void write(final int b) {
                     mBB.put((byte) b);
                 }
 
+                @Override
                 public void write(final byte[] b) {
                     mBB.put(b);
                 }
 
+                @Override
                 public void write(final byte[] b, final int off, final int l) {
                     mBB.put(b, off, l);
                 }
@@ -330,8 +350,11 @@ public class TestImmutableRoaringBitmap {
 			DataOutputStream dos = new DataOutputStream(new OutputStream(){
 	        ByteBuffer mBB;
 	        OutputStream init(ByteBuffer mbb) {mBB=mbb; return this;}
+	            @Override
 	            public void write(int b) {mBB.put((byte) b);}
+	            @Override
 	            public void write(byte[] b) {}
+	            @Override
 	            public void write(byte[] b, int off, int l) { mBB.put(b,off,l); }
 	        }.init(outbb));
 			mrb.serialize(dos);
@@ -746,4 +769,29 @@ public class TestImmutableRoaringBitmap {
         rb2.andNot(rb);
         Assert.assertEquals(rb2, off);
     }
+
+  @Test
+  public void fliptest1() {
+    final MutableRoaringBitmap rb = new MutableRoaringBitmap();
+    rb.add(0);
+    rb.add(2);
+    final MutableRoaringBitmap rb2 = MutableRoaringBitmap.flip(rb, 0, 3);
+    final MutableRoaringBitmap result = new MutableRoaringBitmap();
+    result.add(1);
+
+    Assert.assertEquals(result, rb2);
+  }
+
+  @Test
+  public void fliptest2() {
+    final MutableRoaringBitmap rb = new MutableRoaringBitmap();
+    rb.add(0);
+    rb.add(2);
+    final MutableRoaringBitmap rb2 = ImmutableRoaringBitmap.flip(rb, 0, 3);
+    final MutableRoaringBitmap result = new MutableRoaringBitmap();
+    result.add(1);
+
+    Assert.assertEquals(result, rb2);
+  }
+
 }

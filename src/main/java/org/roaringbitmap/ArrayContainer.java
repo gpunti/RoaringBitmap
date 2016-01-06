@@ -71,12 +71,15 @@ public final class ArrayContainer extends Container implements Cloneable {
         if(cardinality == 0)
             return 0; // should never happen
         int numRuns = 1;
-        for (int i = 0; i < cardinality - 1; i++) {
-            // this way of doing the computation maximizes superscalar opportunities, can even vectorize!
-            if(Util.toIntUnsigned(content[i]) + 1 != Util.toIntUnsigned(content[i+1])) ++numRuns;
+        int oldv = Util.toIntUnsigned(content[0]);
+        for (int i = 1; i < cardinality ; i++) {
+            int newv = Util.toIntUnsigned(content[i]);
+            if(oldv + 1 != newv) ++numRuns;
+            oldv = newv;
         }
         return numRuns;
     }
+
 
 
   
@@ -119,10 +122,22 @@ public final class ArrayContainer extends Container implements Cloneable {
     }
 
     @Override
+    public int andCardinality(final ArrayContainer value2) {
+        return Util.unsignedLocalIntersect2by2Cardinality(content,
+                cardinality, value2.content,
+                value2.getCardinality());
+    }
+    
+    @Override
     public Container and(BitmapContainer x) {
         return x.and(this);
     }
 
+    @Override
+    public int andCardinality(BitmapContainer x) {
+        return x.andCardinality(this);
+    }
+    
     @Override
     public ArrayContainer andNot(final ArrayContainer value2) {
         ArrayContainer value1 = this;
@@ -138,9 +153,11 @@ public final class ArrayContainer extends Container implements Cloneable {
     public ArrayContainer andNot(BitmapContainer value2) {
         final ArrayContainer answer = new ArrayContainer(content.length);
         int pos = 0;
-        for (int k = 0; k < cardinality; ++k)
-            if (!value2.contains(this.content[k]))
-                answer.content[pos++] = this.content[k];
+        for (int k = 0; k < cardinality; ++k) {
+            short val = this.content[k];
+            if (!value2.contains(val))
+                answer.content[pos++] = val;
+        }
         answer.cardinality = pos;
         return answer;
     }
@@ -240,9 +257,11 @@ public final class ArrayContainer extends Container implements Cloneable {
     @Override
     public Container iand(BitmapContainer value2) {
         int pos = 0;
-        for (int k = 0; k < cardinality; ++k)
-            if (value2.contains(this.content[k]))
-                this.content[pos++] = this.content[k];
+        for (int k = 0; k < cardinality; ++k) {
+            short v = this.content[k];
+            if (value2.contains(v))
+                this.content[pos++] = v;
+        }
         cardinality = pos;
         return this;
     }
@@ -258,9 +277,11 @@ public final class ArrayContainer extends Container implements Cloneable {
     @Override
     public ArrayContainer iandNot(BitmapContainer value2) {
         int pos = 0;
-        for (int k = 0; k < cardinality; ++k)
-            if (!value2.contains(this.content[k]))
-                this.content[pos++] = this.content[k];
+        for (int k = 0; k < cardinality; ++k) {
+            short v = this.content[k];
+            if (!value2.contains(v))
+                this.content[pos++] = v;
+        }
         this.cardinality = pos;
         return this;
     }
@@ -274,9 +295,13 @@ public final class ArrayContainer extends Container implements Cloneable {
     // the illegal container does not return it.
     private void increaseCapacity(boolean allowIllegalSize) {
         int newCapacity = (this.content.length == 0) ? DEFAULT_INIT_SIZE : this.content.length < 64 ? this.content.length * 2
-                : this.content.length < 1024 ? this.content.length * 3 / 2
+                : this.content.length < 1067 ? this.content.length * 3 / 2
                 : this.content.length * 5 / 4;
+        // never allocate more than we will ever need
         if (newCapacity > ArrayContainer.DEFAULT_MAX_SIZE  && ! allowIllegalSize)
+            newCapacity = ArrayContainer.DEFAULT_MAX_SIZE;
+        // if we are within 1/16th of the max, go to max 
+        if( newCapacity < ArrayContainer.DEFAULT_MAX_SIZE - ArrayContainer.DEFAULT_MAX_SIZE/16)
             newCapacity = ArrayContainer.DEFAULT_MAX_SIZE;
         this.content = Arrays.copyOf(this.content, newCapacity);
     }
@@ -286,7 +311,11 @@ public final class ArrayContainer extends Container implements Cloneable {
                 : this.content.length < 1024 ? this.content.length * 3 / 2
                 : this.content.length * 5 / 4;
         if(newCapacity < min) newCapacity = min;
+        // never allocate more than we will ever need
         if (newCapacity > ArrayContainer.DEFAULT_MAX_SIZE)
+            newCapacity = ArrayContainer.DEFAULT_MAX_SIZE;
+        // if we are within 1/16th of the max, go to max 
+        if( newCapacity < ArrayContainer.DEFAULT_MAX_SIZE - ArrayContainer.DEFAULT_MAX_SIZE/16)
             newCapacity = ArrayContainer.DEFAULT_MAX_SIZE;
         this.content = Arrays.copyOf(this.content, newCapacity);
     }
@@ -294,6 +323,7 @@ public final class ArrayContainer extends Container implements Cloneable {
     
     @Override
     public Container inot(final int firstOfRange, final int lastOfRange) {
+        // TODO: may need to convert to a RunContainer
         // determine the span of array indices to be affected
         int startIndex = Util.unsignedBinarySearch(content, 0, cardinality, (short) firstOfRange);
         if (startIndex < 0)
@@ -423,6 +453,7 @@ public final class ArrayContainer extends Container implements Cloneable {
     // shares lots of code with inot; candidate for refactoring
     @Override
     public Container not(final int firstOfRange, final int lastOfRange) {
+        // TODO: may need to convert to a RunContainer
         if (firstOfRange >= lastOfRange) {
             return clone(); // empty range
         }
@@ -480,12 +511,14 @@ public final class ArrayContainer extends Container implements Cloneable {
         if (totalCardinality > DEFAULT_MAX_SIZE) {// it could be a bitmap!
             BitmapContainer bc = new BitmapContainer();
             for (int k = 0; k < value2.cardinality; ++k) {
-                final int i = Util.toIntUnsigned(value2.content[k]) >>> 6;
-                bc.bitmap[i] |= (1l << value2.content[k]);
+                short v = value2.content[k];
+                final int i = Util.toIntUnsigned(v) >>> 6;
+                bc.bitmap[i] |= (1l << v);
             }
             for (int k = 0; k < this.cardinality; ++k) {
-                final int i = Util.toIntUnsigned(this.content[k]) >>> 6;
-                bc.bitmap[i] |= (1l << this.content[k]);
+                short v = this.content[k];
+                final int i = Util.toIntUnsigned(v) >>> 6;
+                bc.bitmap[i] |= (1l << v);
             }
             bc.cardinality = 0;
             for (long k : bc.bitmap) {
@@ -648,8 +681,9 @@ public final class ArrayContainer extends Container implements Cloneable {
     protected void writeArray(DataOutput out) throws IOException {
         // little endian
         for (int k = 0; k < this.cardinality; ++k) {
-            out.write((this.content[k]) & 0xFF);
-            out.write((this.content[k] >>> 8) & 0xFF);
+            short v = this.content[k];
+            out.write(v & 0xFF);
+            out.write((v >>> 8) & 0xFF);
         }
     }
 
@@ -665,12 +699,14 @@ public final class ArrayContainer extends Container implements Cloneable {
         if (totalCardinality > DEFAULT_MAX_SIZE) {// it could be a bitmap!
             BitmapContainer bc = new BitmapContainer();
             for (int k = 0; k < value2.cardinality; ++k) {
-                final int i = Util.toIntUnsigned(value2.content[k]) >>> 6;
-                bc.bitmap[i] ^= (1l << value2.content[k]);
+                short v = value2.content[k];
+                final int i = Util.toIntUnsigned(v) >>> 6;
+                bc.bitmap[i] ^= (1l << v);
             }
             for (int k = 0; k < this.cardinality; ++k) {
-                final int i = Util.toIntUnsigned(this.content[k]) >>> 6;
-                bc.bitmap[i] ^= (1l << this.content[k]);
+                short v = this.content[k];
+                final int i = Util.toIntUnsigned(v) >>> 6;
+                bc.bitmap[i] ^= (1l << v);
             }
             bc.cardinality = 0;
             for (long k : bc.bitmap) {
@@ -716,52 +752,53 @@ public final class ArrayContainer extends Container implements Cloneable {
             return clone();
     }
 
-	@Override
-	public Container iadd(int begin, int end) {
-	    int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
-				(short) begin);
-		if (indexstart < 0)
-			indexstart = -indexstart - 1;
-		int indexend = Util.unsignedBinarySearch(content, 0, cardinality,
-				(short) (end - 1));
-		if (indexend < 0)
-			indexend = -indexend - 1;
-		else indexend++;
-		int rangelength = end - begin;
-		int newcardinality = indexstart + (cardinality - indexend) + rangelength;
-		if (newcardinality > DEFAULT_MAX_SIZE) {
-			BitmapContainer a = this.toBitmapContainer();
-			return a.iadd(begin, end);
-		}
-		if (newcardinality >= this.content.length)
-			increaseCapacity(newcardinality);
-		System.arraycopy(content, indexend, content, indexstart + rangelength,
-				cardinality - indexend);
-		for (int k = 0; k <  rangelength; ++k) {
-			content[k+indexstart] = (short) (begin + k);
-		}
-		cardinality = newcardinality;
-		return this;
-	}
+    @Override
+    public Container iadd(int begin, int end) {
+        // TODO: may need to convert to a RunContainer
+        int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
+                (short) begin);
+        if (indexstart < 0)
+            indexstart = -indexstart - 1;
+        int indexend = Util.unsignedBinarySearch(content, 0, cardinality,
+                (short) (end - 1));
+        if (indexend < 0)
+            indexend = -indexend - 1;
+        else indexend++;
+        int rangelength = end - begin;
+        int newcardinality = indexstart + (cardinality - indexend) + rangelength;
+        if (newcardinality > DEFAULT_MAX_SIZE) {
+            BitmapContainer a = this.toBitmapContainer();
+            return a.iadd(begin, end);
+        }
+        if (newcardinality >= this.content.length)
+            increaseCapacity(newcardinality);
+        System.arraycopy(content, indexend, content, indexstart + rangelength,
+                cardinality - indexend);
+        for (int k = 0; k <  rangelength; ++k) {
+            content[k+indexstart] = (short) (begin + k);
+        }
+        cardinality = newcardinality;
+        return this;
+    }
 
-	@Override
-	public Container iremove(int begin, int end) {
-		int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
-				(short) begin);
-		if (indexstart < 0)
-			indexstart = -indexstart - 1;
-		int indexend = Util.unsignedBinarySearch(content, 0, cardinality,
-				(short) (end - 1));
-		if (indexend < 0)
-			indexend = -indexend - 1;
-		else
-			indexend++;
-		int rangelength = indexend - indexstart;
-		System.arraycopy(content, indexstart + rangelength, content, indexstart,
-				cardinality - indexstart - rangelength);
-		cardinality -= rangelength;
-		return this;
-	}
+    @Override
+    public Container iremove(int begin, int end) {
+        int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
+                (short) begin);
+        if (indexstart < 0)
+            indexstart = -indexstart - 1;
+        int indexend = Util.unsignedBinarySearch(content, 0, cardinality,
+                (short) (end - 1));
+        if (indexend < 0)
+            indexend = -indexend - 1;
+        else
+            indexend++;
+        int rangelength = indexend - indexstart;
+        System.arraycopy(content, indexstart + rangelength, content, indexstart,
+                cardinality - indexstart - rangelength);
+        cardinality -= rangelength;
+        return this;
+    }
 
     @Override
     public Container flip(short x) {
@@ -793,7 +830,7 @@ public final class ArrayContainer extends Container implements Cloneable {
 
     @Override
     public Container add(int begin, int end) {
-
+        // TODO: may need to convert to a RunContainer
         int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
                 (short) begin);
         if (indexstart < 0)
@@ -821,25 +858,25 @@ public final class ArrayContainer extends Container implements Cloneable {
         return answer;
     }
 
-	@Override
-	public Container remove(int begin, int end) {
-		int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
-				(short) begin);
-		if (indexstart < 0)
-			indexstart = -indexstart - 1;
-		int indexend = Util.unsignedBinarySearch(content, 0, cardinality,
-				(short) (end - 1));
-		if (indexend < 0)
-			indexend = -indexend - 1;
-		else
-			indexend++;
-		int rangelength = indexend - indexstart;
-		ArrayContainer answer = clone();
-		System.arraycopy(content, indexstart + rangelength, answer.content,
-				indexstart, cardinality - indexstart - rangelength);
-		answer.cardinality = cardinality - rangelength;
-		return answer;
-	}
+    @Override
+    public Container remove(int begin, int end) {
+        int indexstart = Util.unsignedBinarySearch(content, 0, cardinality,
+                (short) begin);
+        if (indexstart < 0)
+            indexstart = -indexstart - 1;
+        int indexend = Util.unsignedBinarySearch(content, 0, cardinality,
+                (short) (end - 1));
+        if (indexend < 0)
+            indexend = -indexend - 1;
+        else
+            indexend++;
+        int rangelength = indexend - indexstart;
+        ArrayContainer answer = clone();
+        System.arraycopy(content, indexstart + rangelength, answer.content,
+                indexstart, cardinality - indexstart - rangelength);
+        answer.cardinality = cardinality - rangelength;
+        return answer;
+    }
 
     @Override
     // see andNot for an approach that might be better.
@@ -847,6 +884,12 @@ public final class ArrayContainer extends Container implements Cloneable {
         return x.and(this);
     }
 
+    @Override
+    // see andNot for an approach that might be better.
+    public int andCardinality(RunContainer x) {
+        return x.andCardinality(this);
+    }
+    
     @Override
     public Container andNot(RunContainer x) {
         int writeLocation=0;
@@ -926,6 +969,42 @@ public final class ArrayContainer extends Container implements Cloneable {
         return this;
     }
 
+    @Override
+    public boolean intersects(ArrayContainer value2) {
+        ArrayContainer value1 = this;
+        return  Util.unsignedIntersects(value1.content,
+                value1.getCardinality(), value2.content,
+                value2.getCardinality());
+    }
+
+    @Override
+    public boolean intersects(BitmapContainer x) {
+        return x.intersects(this);
+    }
+
+    @Override
+    public boolean intersects(RunContainer x) {
+        return x.intersects(this);
+    }
+
+    @Override
+    public Container runOptimize() {
+        // TODO: consider borrowing the BitmapContainer idea of early
+        // abandonment
+        // with ArrayContainers, when the number of runs in the arrayContainer
+        // passes some threshold based on the cardinality.
+        int numRuns = numberOfRuns();
+        int sizeAsRunContainer = RunContainer.serializedSizeInBytes(numRuns);
+        if (getArraySizeInBytes() > sizeAsRunContainer) {
+            return new RunContainer(this, numRuns); // this could be maybe
+                                                    // faster if initial
+                                                    // container is a bitmap
+        } else {
+            return this;
+        }
+    }
+   
+
 }
 
 
@@ -940,11 +1019,13 @@ final class ArrayContainerShortIterator implements PeekableShortIterator {
         wrap(p);
     }
 
+    @Override
     public short peekNext() {
         return parent.content[pos];
     }
     
 
+    @Override
     public void advanceIfNeeded(short minval) {
         pos = Util.advanceUntil(parent.content, pos - 1, parent.cardinality, minval);
     }

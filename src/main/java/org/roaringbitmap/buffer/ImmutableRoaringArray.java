@@ -18,6 +18,7 @@ import java.nio.channels.WritableByteChannel;
 
 
 
+
 /**
  * This is the underlying data structure for an ImmutableRoaringBitmap. This
  * class is not meant for end-users.
@@ -32,7 +33,42 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
     ByteBuffer buffer;
     int size;
 
-    protected int unsignedBinarySearch(short k) {
+    private int unsignedBinarySearch(short k) {
+        if(BufferUtil.USE_HYBRID_BINSEARCH)
+            return hybridUnsignedBinarySearch(k);
+        else 
+            return branchyUnsignedBinarySearch(k);
+    }
+    
+    // starts with binary search and finishes with a sequential search
+    private int hybridUnsignedBinarySearch( final short k) {
+        int low = 0;
+        int high = this.size - 1;
+        final int ikey = BufferUtil.toIntUnsigned(k);
+        // 32 in the next line matches the size of a cache line
+        while (low + 16 <= high) {
+            final int middleIndex = (low + high) >>> 1;
+            final int middleValue = getKey(middleIndex);
+            if (middleValue < ikey)
+                low = middleIndex + 1;
+            else if (middleValue > ikey)
+                high = middleIndex - 1;
+            else
+                return middleIndex;
+        }
+        // we finish the job with a sequential search 
+        int x = low;
+        for(; x <= high; ++x) {
+            final int val = getKey(x);
+            if(val >= ikey) {
+                if(val == ikey) return x;
+                break;
+            }
+        }
+        return -(x + 1);
+    }
+    
+    private int branchyUnsignedBinarySearch( final short k) {
         int low = 0;
         int high = this.size - 1;
         final int ikey = BufferUtil.toIntUnsigned(k);
@@ -48,14 +84,16 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
         }
         return -(low + 1);
     }
+
     
 
     /**
      * Create an array based on a previously serialized ByteBuffer.
+     * The input ByteBuffer is effectively copied (with the slice operation)
+     * so you should expect the provided ByteBuffer to remain unchanged.
      * 
      * @param bbf The source ByteBuffer
      */
-
     protected ImmutableRoaringArray(ByteBuffer bbf) {
         buffer = bbf.slice();
         buffer.order(ByteOrder.LITTLE_ENDIAN);
@@ -139,31 +177,36 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
     }
 
     // involves a binary search
+    @Override
     public MappeableContainer getContainer(short x) {
         final int i = unsignedBinarySearch(x);
         if (i < 0)
             return null;
         return getContainerAtIndex(i);
     }
-
+    
+    @Override
     public MappeableContainer getContainerAtIndex(int i) {
-    	int cardinality = getCardinality(i);
+        int cardinality = getCardinality(i);
         boolean isBitmap = cardinality > MappeableArrayContainer.DEFAULT_MAX_SIZE; // if not a runcontainer
-        buffer.position(getOffsetContainer(i));
+        ByteBuffer tmp = buffer.duplicate();// sad but ByteBuffer is not thread-safe so it is either a duplicate or a lock
+        // note that tmp will indeed be garbage-collected some time after the end of this function 
+        tmp.order(buffer.order());
+        tmp.position(getOffsetContainer(i));
         boolean hasrun = hasRunCompression();
         if (isRunContainer(i,hasrun))  {
             // first, we have a short giving the number of runs
-            int nbrruns = BufferUtil.toIntUnsigned(buffer.getShort());
-            final ShortBuffer shortArray = buffer.asShortBuffer().slice();
+            int nbrruns = BufferUtil.toIntUnsigned(tmp.getShort());
+            final ShortBuffer shortArray = tmp.asShortBuffer();
             shortArray.limit(2*nbrruns);
             return new MappeableRunContainer(shortArray,nbrruns);
         }
         if (isBitmap) {
-            final LongBuffer bitmapArray = buffer.asLongBuffer().slice();
+            final LongBuffer bitmapArray = tmp.asLongBuffer();
             bitmapArray.limit(MappeableBitmapContainer.MAX_CAPACITY / 64);            
             return new MappeableBitmapContainer(bitmapArray, cardinality);
         } else {
-            final ShortBuffer shortArray = buffer.asShortBuffer().slice();
+            final ShortBuffer shortArray = tmp.asShortBuffer();
             shortArray.limit(cardinality);
             return new MappeableArrayContainer(shortArray, cardinality);
         }
@@ -200,6 +243,7 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
         }
     }
 
+    @Override
     public MappeableContainerPointer getContainerPointer() {
         return getContainerPointer(0);
     }
@@ -212,6 +256,7 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
         return this.size == 0;
     }
 
+    @Override
     public MappeableContainerPointer getContainerPointer(final int startIndex) {        
         final boolean hasrun = isEmpty() ? false: hasRunCompression();
         return new MappeableContainerPointer() {
@@ -244,13 +289,13 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
                 --k;
             }
 
-			@Override
-			public int compareTo(MappeableContainerPointer o) {
-				if (key() != o.key())
-					return BufferUtil.toIntUnsigned(key())
-							- BufferUtil.toIntUnsigned(o.key());
+            @Override
+            public int compareTo(MappeableContainerPointer o) {
+                if (key() != o.key())
+                    return BufferUtil.toIntUnsigned(key())
+                            - BufferUtil.toIntUnsigned(o.key());
                 return o.getCardinality() - this.getCardinality();
-			}
+            }
 
             @Override
             public boolean isBitmapContainer() {
@@ -301,18 +346,21 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
     }
 
     private int getKey(int k) {
-    	return BufferUtil.toIntUnsigned(buffer.getShort(getStartOfKeys() + 4 * k));
+        return BufferUtil.toIntUnsigned(buffer.getShort(getStartOfKeys() + 4 * k));
     }
 
     // involves a binary search
+    @Override
     public int getIndex(short x) {
         return unsignedBinarySearch(x);
     }
 
+    @Override
     public short getKeyAtIndex(int i) {
         return buffer.getShort(4 * i + getStartOfKeys());
     }
-
+    
+    @Override
     public int advanceUntil(short x, int pos) {
         int lower = pos + 1;
 
@@ -375,6 +423,7 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
      * @throws IOException
      *             Signals that an I/O exception has occurred.
      */
+    @Override
     public void serialize(DataOutput out) throws IOException {
         if(buffer.hasArray()) {
             out.write(buffer.array(), buffer.arrayOffset(), buffer.limit());
@@ -388,10 +437,12 @@ public final class ImmutableRoaringArray implements PointableRoaringArray {
     /**
      * @return the size that the data structure occupies on disk
      */
+    @Override
     public int serializedSizeInBytes() {
         return buffer.limit();
     }
 
+    @Override
     public int size() {
         return this.size;
     }

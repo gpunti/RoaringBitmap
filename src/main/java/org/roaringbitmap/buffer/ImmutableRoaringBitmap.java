@@ -5,8 +5,10 @@
 
 package org.roaringbitmap.buffer;
 
+import org.roaringbitmap.FastAggregation;
 import org.roaringbitmap.ImmutableBitmapDataProvider;
 import org.roaringbitmap.IntIterator;
+import org.roaringbitmap.RoaringBitmap;
 import org.roaringbitmap.ShortIterator;
 import org.roaringbitmap.Util;
 
@@ -17,7 +19,8 @@ import java.util.Iterator;
 
 /**
  * ImmutableRoaringBitmap provides a compressed immutable (cannot be modified)
- * bitmap. It is meant to be used with org.roaringbitmap.buffer.MutableRoaringBitmap.
+ * bitmap. It is meant to be used with org.roaringbitmap.buffer.MutableRoaringBitmap,
+ * a derived class that adds methods to modify the bitmap.
  * 
  * <pre>
  * {@code
@@ -44,6 +47,8 @@ import java.util.Iterator;
  * It can also be constructed from a ByteBuffer (useful for memory mapping).
  * 
  * Objects of this class may reside almost entirely in memory-map files.
+ * 
+ * @see MutableRoaringBitmap
  */
 public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, ImmutableBitmapDataProvider {
 
@@ -79,6 +84,45 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
                 if (c.getCardinality() > 0) {
                     answer.getMappeableRoaringArray().append(s1, c);
                 }
+                ++pos1;
+                ++pos2;
+            } else if (Util.compareUnsigned(s1, s2) < 0) { // s1 < s2
+                pos1 = x1.highLowContainer.advanceUntil(s2,pos1);
+            } else { // s1 > s2
+                pos2 = x2.highLowContainer.advanceUntil(s1,pos2);
+            }
+        }
+        return answer;
+    }
+
+
+    /**
+     * Cardinality of Bitwise AND (intersection) operation. 
+     * The provided bitmaps are *not* 
+     * modified. This operation is thread-safe as long as the provided
+     * bitmaps remain unchanged.
+     *
+     * @param x1 first bitmap
+     * @param x2 other bitmap
+     * @return as if you did and(x2,x2).getCardinality()
+     * @see BufferFastAggregation#and(ImmutableRoaringBitmap...)
+     */
+    public static int andCardinality(final ImmutableRoaringBitmap x1,
+                                           final ImmutableRoaringBitmap x2) {
+        int answer = 0;
+        int pos1 = 0, pos2 = 0;
+        final int length1 = x1.highLowContainer.size(), length2 = x2.highLowContainer.size();
+
+        while (pos1 < length1 && pos2 < length2) {
+            final short s1 = x1.highLowContainer.getKeyAtIndex(pos1);
+            final short s2 = x2.highLowContainer.getKeyAtIndex(pos2);
+
+            if (s1 == s2) {
+                final MappeableContainer c1 = x1.highLowContainer.getContainerAtIndex(pos1);
+                final MappeableContainer c2 = x2.highLowContainer.getContainerAtIndex(pos2);
+                // TODO: could be made faster if we did not have to materialize container
+                final MappeableContainer c = c1.and(c2);
+                answer += c.getCardinality();
                 ++pos1;
                 ++pos2;
             } else if (Util.compareUnsigned(s1, s2) < 0) { // s1 < s2
@@ -176,7 +220,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
             if (i >= 0) {
                 final MappeableContainer c = bm.highLowContainer
                         .getContainerAtIndex(i).not(containerStart,
-                                containerLast);
+                                containerLast+1);
                 if (c.getCardinality() > 0)
                     answer.getMappeableRoaringArray().insertNewKeyValueAt(
                             -j - 1, hb, c);
@@ -260,6 +304,67 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
         return answer;
     }
 
+    /**
+     * Cardinality of the bitwise OR (union) operation. The provided bitmaps are *not* modified.
+     * This operation is thread-safe as long as the provided bitmaps remain
+     * unchanged.
+     * 
+     * If you have more than 2 bitmaps, consider using the FastAggregation
+     * class.
+     * 
+     * @param x1
+     *            first bitmap
+     * @param x2
+     *            other bitmap
+     * @return cardinality of the union
+     * @see BufferFastAggregation#or(ImmutableRoaringBitmap...)
+     * @see BufferFastAggregation#horizontal_or(ImmutableRoaringBitmap...)
+     */
+    public static int orCardinality(final ImmutableRoaringBitmap x1,
+            final ImmutableRoaringBitmap x2) {
+        int answer = 0;
+        MappeableContainerPointer i1 = x1.highLowContainer
+                .getContainerPointer();
+        MappeableContainerPointer i2 = x2.highLowContainer
+                .getContainerPointer();
+        main: if (i1.hasContainer() && i2.hasContainer()) {
+            while (true) {
+                if (i1.key() == i2.key()) {
+                    // TODO: could be faster if we did not have to materialize the container
+                    answer+= i1.getContainer().or(i2.getContainer()).getCardinality();
+                    i1.advance();
+                    i2.advance();
+                    if (!i1.hasContainer() || !i2.hasContainer())
+                        break main;
+                } else if (Util.compareUnsigned(i1.key(), i2.key()) < 0) { // i1.key() < i2.key()
+                    answer += i1.getCardinality();
+                    i1.advance();
+                    if (!i1.hasContainer())
+                        break main;
+                } else { // i1.key() > i2.key()
+                    answer += i2.getCardinality();
+                    i2.advance();
+                    if (!i2.hasContainer())
+                        break main;
+                }
+            }
+        }
+        if (!i1.hasContainer()) {
+            while (i2.hasContainer()) {
+                answer += i2.getCardinality();
+                i2.advance();
+            }
+        } else if (!i2.hasContainer()) {
+            while (i1.hasContainer()) {
+                answer += i1.getCardinality();
+                i1.advance();
+            }
+        }
+        return answer;
+    }
+
+
+    // important: inputs should not have been computed lazily
     protected static MutableRoaringBitmap lazyor(final ImmutableRoaringBitmap x1,
             final ImmutableRoaringBitmap x2) {
         final MutableRoaringBitmap answer = new MutableRoaringBitmap();
@@ -380,7 +485,8 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
     }
 
     /**
-     * Constructs a new ImmutableRoaringBitmap. Only meta-data is loaded to RAM.
+     * Constructs a new ImmutableRoaringBitmap starting at this ByteBuffer's position(). 
+     * Only meta-data is loaded to RAM.
      * The rest is mapped to the ByteBuffer.
      * 
      * It is not necessary that limit() on the input ByteBuffer indicates
@@ -421,6 +527,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      *            integer value
      * @return whether the integer value is included.
      */
+    @Override
     public boolean contains(final int x) {
         final short hb = BufferUtil.highbits(x);
         final MappeableContainer c = highLowContainer.getContainer(hb);
@@ -458,6 +565,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * 
      * @return the cardinality
      */
+    @Override
     public int getCardinality() {
         int size = 0;
         for(int i = 0 ; i < this.highLowContainer.size(); ++i ) {
@@ -472,6 +580,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * 
      * @return true if this bitmap contains no set bit
      */
+    @Override
     public boolean isEmpty() {
         return highLowContainer.size() == 0;
     }
@@ -480,6 +589,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * @return a custom iterator over set bits, the bits are traversed
      * in ascending sorted order
      */
+    @Override
     public IntIterator getIntIterator() {
         return new ImmutableRoaringIntIterator();
     }
@@ -488,6 +598,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * @return a custom iterator over set bits, the bits are traversed
      * in descending sorted order
      */
+    @Override
     public IntIterator getReverseIntIterator() {
         return new ImmutableRoaringReverseIntIterator();
     }
@@ -503,8 +614,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * 
      * @return estimated memory usage.
      */
-
-
+    @Override
     public int getSizeInBytes() {
         int size = 4;
         for(int i = 0 ; i < this.highLowContainer.size(); ++i ) {
@@ -606,15 +716,50 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * Serialize this bitmap.
      * 
      * Consider calling {@link MutableRoaringBitmap#runOptimize} before serialization to
-     * improve compression.
+     * improve compression if this is a MutableRoaringBitmap instance.
      * 
      * The current bitmap is not modified.
+     * 
+     * Advanced example: To serialize your bitmap to a ByteBuffer,
+     * you can do the following.
+     * 
+     * <pre>
+     * {@code
+     *   //r is your bitmap
+     *
+     *   // r.runOptimize(); // might improve compression, only if you have a 
+     *                       // MutableRoaringBitmap instance.
+     *   // next we create the ByteBuffer where the data will be stored
+     *   ByteBuffer outbb = ByteBuffer.allocate(r.serializedSizeInBytes());
+     *   // then we can serialize on a custom OutputStream
+     *   mrb.serialize(new DataOutputStream(new OutputStream(){
+     *       ByteBuffer mBB;
+     *       OutputStream init(ByteBuffer mbb) {mBB=mbb; return this;}
+     *       public void close() {}
+     *       public void flush() {}
+     *       public void write(int b) {
+     *         mBB.put((byte) b);}
+     *       public void write(byte[] b) {mBB.put(b);}
+     *       public void write(byte[] b, int off, int l) {mBB.put(b,off,l);}
+     *   }.init(outbb)));
+     *   // outbuff will now contain a serialized version of your bitmap
+     * }
+     * </pre>
+     * 
+     * Note: Java's data structures are in big endian format. Roaring
+     * serializes to a little endian format, so the bytes are flipped
+     * by the library  during serialization to ensure that what is stored 
+     * is in little endian---despite Java's big endianness. You can defeat 
+     * this process by reflipping the bytes again in a custom DataOutput which
+     * could lead to serialized Roaring objects with an incorrect byte order. 
+     *
      * 
      * @param out
      *            the DataOutput stream
      * @throws IOException
      *             Signals that an I/O exception has occurred.
      */
+    @Override
     public void serialize(DataOutput out) throws IOException {
         this.highLowContainer.serialize(out);
     }
@@ -628,11 +773,45 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
     }
 
     /**
+     * Checks whether the two bitmaps intersect. This can be much faster
+     * than calling "and" and checking the cardinality of the result.
+     *
+     * @param x1 first bitmap
+     * @param x2 other bitmap
+     * @return true if they intersect
+     */
+    public static boolean intersects(final ImmutableRoaringBitmap x1,
+                                           final ImmutableRoaringBitmap x2) {
+        int pos1 = 0, pos2 = 0;
+        final int length1 = x1.highLowContainer.size(), length2 = x2.highLowContainer.size();
+
+        while (pos1 < length1 && pos2 < length2) {
+            final short s1 = x1.highLowContainer.getKeyAtIndex(pos1);
+            final short s2 = x2.highLowContainer.getKeyAtIndex(pos2);
+
+            if (s1 == s2) {
+                final MappeableContainer c1 = x1.highLowContainer.getContainerAtIndex(pos1);
+                final MappeableContainer c2 = x2.highLowContainer.getContainerAtIndex(pos2);
+                if(c1.intersects(c2)) return true;
+                ++pos1;
+                ++pos2;
+            } else if (Util.compareUnsigned(s1, s2) < 0) { // s1 < s2
+                pos1 = x1.highLowContainer.advanceUntil(s2,pos1);
+            } else { // s1 > s2
+                pos2 = x2.highLowContainer.advanceUntil(s1,pos2);
+            }
+        }
+        return false;
+    }
+    
+
+    /**
      * Report the number of bytes required for serialization. This count will
      * match the bytes written when calling the serialize method. 
      * 
      * @return the size in bytes
      */
+    @Override
     public int serializedSizeInBytes() {
         return this.highLowContainer.serializedSizeInBytes();
     }
@@ -643,6 +822,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * 
      * @return array representing the set values.
      */
+    @Override
     public int[] toArray() {
         final int[] array = new int[this.getCardinality()];
         int pos = 0, pos2 = 0;
@@ -775,7 +955,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
         @Override
         public IntIterator clone() {
             try {
-                ImmutableRoaringIntIterator x = (ImmutableRoaringIntIterator) super.clone();
+                ImmutableRoaringReverseIntIterator x = (ImmutableRoaringReverseIntIterator) super.clone();
                 x.iter = this.iter.clone();
                 x.cp = this.cp.clone();
                 return x;
@@ -805,6 +985,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      *
      * @return the rank
      */
+    @Override
     public int rank(int x) {
         int size = 0;
         short xhigh = BufferUtil.highbits(x);
@@ -825,6 +1006,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      *
      * @return the value
      */
+    @Override
     public int select(int j) {
         int leftover = j;
         for (int i = 0; i < this.highLowContainer.size(); i++) {
@@ -848,6 +1030,7 @@ public class ImmutableRoaringBitmap implements Iterable<Integer>, Cloneable, Imm
      * @param maxcardinality maximal cardinality
      * @return a new bitmap with cardinality no more than maxcardinality
      */
+    @Override
     public MutableRoaringBitmap limit(int maxcardinality) {
         MutableRoaringBitmap answer = new MutableRoaringBitmap();
         int currentcardinality = 0;        

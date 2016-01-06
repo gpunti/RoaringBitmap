@@ -18,6 +18,20 @@ import java.util.Iterator;
  * It is similar to org.roaringbitmap.RoaringBitmap, but it differs in that it
  * can interact with ImmutableRoaringBitmap objects.
  * 
+ * A MutableRoaringBitmap is an instance of an ImmutableRoaringBitmap
+ * (where methods like "serialize" are implemented). That is, they both
+ * share the same core (immutable) methods, but a  MutableRoaringBitmap 
+ * adds methods that allow you to modify the object. This design allows us
+ * to use MutableRoaringBitmap as ImmutableRoaringBitmap instances when needed.
+ * 
+ * A MutableRoaringBitmap can be used much like an org.roaringbitmap.RoaringBitmap
+ * instance, and they serialize to the same output. The RoaringBitmap instance
+ * will be faster since it does not carry the overhead of a ByteBuffer back-end,
+ * but the MutableRoaringBitmap can be used as an ImmutableRoaringBitmap 
+ * instance. Thus, if you use ImmutableRoaringBitmap, you probably need to use
+ * MutableRoaringBitmap instances as well; if you do not use ImmutableRoaringBitmap,
+ * you probably want to use only RoaringBitmap instances.
+ * 
  * <pre>
  * {@code
  *      import org.roaringbitmap.buffer.*;
@@ -36,6 +50,9 @@ import java.util.Iterator;
  *      rr.serialize(wheretoserialize);
  * }
  * </pre>
+ * 
+ * @see ImmutableRoaringBitmap
+ * @see org.roaringbitmap.RoaringBitmap
  */
 public class MutableRoaringBitmap extends ImmutableRoaringBitmap
         implements Cloneable, Serializable, Iterable<Integer>, Externalizable, BitmapDataProvider {
@@ -355,9 +372,9 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
         final short hb = BufferUtil.highbits(x);
         final int i = highLowContainer.getIndex(hb);
         if (i >= 0) {
-        	MappeableContainer C = highLowContainer.getContainerAtIndex(i);
-        	int oldcard = C.getCardinality();
-        	C = C.add(BufferUtil.lowbits(x));
+            MappeableContainer C = highLowContainer.getContainerAtIndex(i);
+            int oldcard = C.getCardinality();
+            C = C.add(BufferUtil.lowbits(x));
             getMappeableRoaringArray().setContainerAtIndex(
                     i,
                     C);
@@ -376,6 +393,7 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
      * @param x
      *            integer value
      */
+    @Override
     public void add(final int x) {
         final short hb = BufferUtil.highbits(x);
         final int i = highLowContainer.getIndex(hb);
@@ -401,12 +419,12 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
         final short hb = BufferUtil.highbits(x);
         final int i = highLowContainer.getIndex(hb);
         if (i >= 0) {
-        	MappeableContainer c =  highLowContainer.getContainerAtIndex(i);
-        	c = c.flip(BufferUtil.lowbits(x));
-        	if(c.getCardinality()>0)
+            MappeableContainer c =  highLowContainer.getContainerAtIndex(i);
+            c = c.flip(BufferUtil.lowbits(x));
+            if(c.getCardinality()>0)
             ((MutableRoaringArray) highLowContainer).setContainerAtIndex(i,c);
-        	else 
-        		((MutableRoaringArray) highLowContainer).removeAtIndex(i);
+            else 
+                ((MutableRoaringArray) highLowContainer).removeAtIndex(i);
         } else {
             final MappeableArrayContainer newac = new MappeableArrayContainer();
             ((MutableRoaringArray) highLowContainer).insertNewKeyValueAt(-i - 1, hb, newac.add(BufferUtil.lowbits(x)));
@@ -887,8 +905,65 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
             ((MutableRoaringArray)highLowContainer).setContainerAtIndex(k,c.repairAfterLazy());
         }
     }
+    
+    // important: inputs should not have been computed lazily
+    protected static MutableRoaringBitmap lazyorfromlazyinputs(final MutableRoaringBitmap x1,
+            final MutableRoaringBitmap x2) {
+        final MutableRoaringBitmap answer = new MutableRoaringBitmap();
+        MappeableContainerPointer i1 = x1.highLowContainer
+                .getContainerPointer();
+        MappeableContainerPointer i2 = x2.highLowContainer
+                .getContainerPointer();
+        main: if (i1.hasContainer() && i2.hasContainer()) {
+            while (true) {
+                if (i1.key() == i2.key()) {
+                    MappeableContainer c1 = i1.getContainer();
+                    MappeableContainer c2 = i2.getContainer();
+                    if((c2 instanceof MappeableBitmapContainer) && (!(c1 instanceof MappeableBitmapContainer))) {
+                        MappeableContainer tmp = c1;
+                        c1 = c2;
+                        c2 = tmp;
+                    }
+                    answer.getMappeableRoaringArray().append(i1.key(),
+                            c1.lazyIOR(c2));
+                    i1.advance();
+                    i2.advance();
+                    if (!i1.hasContainer() || !i2.hasContainer())
+                        break main;
+                } else if (Util.compareUnsigned(i1.key(), i2.key()) < 0) { // i1.key() < i2.key()
+                    answer.getMappeableRoaringArray().appendCopy(i1.key(),
+                            i1.getContainer());// TODO: would not need to make a copy
+                    i1.advance();
+                    if (!i1.hasContainer())
+                        break main;
+                } else { // i1.key() > i2.key()
+                    answer.getMappeableRoaringArray().appendCopy(i2.key(),
+                            i2.getContainer());// TODO: would not need to make a copy
+                    i2.advance();
+                    if (!i2.hasContainer())
+                        break main;
+                }
+            }
+        }
+        if (!i1.hasContainer()) {
+            while (i2.hasContainer()) {
+                answer.getMappeableRoaringArray().appendCopy(i2.key(),
+                        i2.getContainer());
+                i2.advance();
+            }
+        } else if (!i2.hasContainer()) {
+            while (i1.hasContainer()) {
+                answer.getMappeableRoaringArray().appendCopy(i1.key(),
+                        i1.getContainer());
+                i1.advance();
+            }
+        }
+        return answer;
+    }
 
-    // call computeCardinality
+
+    // call repairAfterLazy on result, eventually
+    // important: x2 should not have been computed lazily
     protected void lazyor(final ImmutableRoaringBitmap x2) {
         int pos1 = 0, pos2 = 0;
         int length1 = highLowContainer.size();
@@ -944,32 +1019,32 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
     }
     
 
-	/**
-	 * If present remove the specified integer (effectively, sets its bit value
-	 * to false)
-	 *
-	 * @param x
-	 *            integer value representing the index in a bitmap
-	 * @return true if the unset bit was already in the bitmap
-	 */
-	public boolean checkedRemove(final int x) {
-		final short hb = BufferUtil.highbits(x);
-		final int i = highLowContainer.getIndex(hb);
-		if (i < 0)
-			return false;
-		MappeableContainer C = highLowContainer.getContainerAtIndex(i);
-		int oldcard = C.getCardinality();
-		C.remove(BufferUtil.lowbits(x));
-		int newcard = C.getCardinality();
-		if (newcard == oldcard)
-			return false;
-		if (newcard > 0) {
-			((MutableRoaringArray) highLowContainer).setContainerAtIndex(i, C);
-		} else {
-			((MutableRoaringArray) highLowContainer).removeAtIndex(i);
-		}
-		return true;
-	}
+    /**
+     * If present remove the specified integer (effectively, sets its bit value
+     * to false)
+     *
+     * @param x
+     *            integer value representing the index in a bitmap
+     * @return true if the unset bit was already in the bitmap
+     */
+    public boolean checkedRemove(final int x) {
+        final short hb = BufferUtil.highbits(x);
+        final int i = highLowContainer.getIndex(hb);
+        if (i < 0)
+            return false;
+        MappeableContainer C = highLowContainer.getContainerAtIndex(i);
+        int oldcard = C.getCardinality();
+        C.remove(BufferUtil.lowbits(x));
+        int newcard = C.getCardinality();
+        if (newcard == oldcard)
+            return false;
+        if (newcard > 0) {
+            ((MutableRoaringArray) highLowContainer).setContainerAtIndex(i, C);
+        } else {
+            ((MutableRoaringArray) highLowContainer).removeAtIndex(i);
+        }
+        return true;
+    }
 
     /**
      * If present remove the specified integers (effectively, sets its bit value
@@ -978,6 +1053,7 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
      * @param x
      *            integer value representing the index in a bitmap
      */
+    @Override
     public void remove(final int x) {
         final short hb = BufferUtil.highbits(x);
         final int i = highLowContainer.getIndex(hb);
@@ -1015,6 +1091,7 @@ public class MutableRoaringBitmap extends ImmutableRoaringBitmap
     /**
      * Recover allocated but unused memory.
      */
+    @Override
     public void trim() {
         for (int i = 0; i < this.highLowContainer.size(); i++) {
             this.highLowContainer.getContainerAtIndex(i).trim();

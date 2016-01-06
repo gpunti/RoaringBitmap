@@ -320,6 +320,47 @@ public abstract class MappeableContainer implements Iterable<Short>, Cloneable,
      */
     public abstract MappeableContainer inot(int rangeStart, int rangeEnd);
 
+    
+    
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+     */
+    public boolean intersects(MappeableContainer x) {
+        if (x instanceof MappeableArrayContainer)
+            return intersects((MappeableArrayContainer) x);
+        else if (x instanceof MappeableBitmapContainer)
+            return intersects((MappeableBitmapContainer) x);
+        return intersects((MappeableRunContainer) x);
+    }
+
+
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+     */
+    public abstract boolean intersects(MappeableArrayContainer x);
+
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+      */
+    public abstract boolean intersects(MappeableBitmapContainer x);
+
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+     */
+    public abstract boolean intersects(MappeableRunContainer x);
+
     /**
      * Computes the in-place bitwise OR of this container with another (union).
      * The current container is generally modified, whereas the provided
@@ -687,16 +728,7 @@ public abstract class MappeableContainer implements Iterable<Short>, Cloneable,
       *         
       *   @return the new container
       */
-
-     public MappeableContainer runOptimize() {
-         int numRuns = numberOfRuns();
-         int sizeAsRunContainer = MappeableRunContainer.getArraySizeInBytes(numRuns);
-         if (getArraySizeInBytes() > sizeAsRunContainer) {
-             return new MappeableRunContainer( getShortIterator(),  numRuns); // this could be maybe faster if initial container is a bitmap
-         } else { 
-             return this;
-         }
-     }
+     public abstract MappeableContainer runOptimize();
      
      protected abstract boolean isArrayBacked();
 

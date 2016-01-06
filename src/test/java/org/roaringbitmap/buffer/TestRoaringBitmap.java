@@ -23,6 +23,42 @@ import java.util.*;
  */
 @SuppressWarnings({"static-method"})
 public class TestRoaringBitmap {
+
+    @Test
+    public void containerSharingWithXor() {
+        MutableRoaringBitmap r1 = new MutableRoaringBitmap();
+        r1.flip(131000, 131001);
+        MutableRoaringBitmap r2 = new MutableRoaringBitmap();
+        r2.add(220000);
+        MutableRoaringBitmap r3 = new MutableRoaringBitmap();
+        int killingPosition = 66000;
+        r3.add(killingPosition);
+        Assert.assertFalse(r1.contains(killingPosition));
+        r2.xor(r1);
+        Assert.assertTrue(r2.contains(131000));
+        Assert.assertFalse(r1.contains(killingPosition));
+        r2.or(r3);
+        Assert.assertTrue(r2.contains(131000));
+        Assert.assertTrue(r2.contains(killingPosition));
+        Assert.assertFalse(r1.contains(killingPosition));
+    }
+
+    @Test
+    public void testAstesana() {
+        MutableRoaringBitmap r1 = new MutableRoaringBitmap();
+        // Strange thing: Replace this line by r1.add(131000) and the bug vanishes!
+        r1.flip(131000, 131001);
+        MutableRoaringBitmap r2 = new MutableRoaringBitmap();
+        r2.add(220000);
+        MutableRoaringBitmap r3 = new MutableRoaringBitmap();
+        int killingPosition = 66000;
+        r3.add(killingPosition);
+        Assert.assertFalse(r1.contains(killingPosition)); //ok
+        r2.or(r1);
+        Assert.assertFalse(r1.contains(killingPosition)); //ok
+        r2.or(r3);
+        Assert.assertFalse(r1.contains(killingPosition)); //ko
+    }
     
     @Test
     public void testOr001() {
@@ -2001,5 +2037,169 @@ public class TestRoaringBitmap {
         MutableRoaringBitmap rbor = MutableRoaringBitmap.or(rb1,rb2);
         Assert.assertTrue(rbor.equals(BufferFastAggregation.horizontal_or(rb1,rb2)));
     }
+
+    
+
+    @Test
+    public void intersecttest() {
+        final MutableRoaringBitmap rr1 = new MutableRoaringBitmap();
+        final MutableRoaringBitmap rr2 = new MutableRoaringBitmap();
+        for (int k = 0; k < 40000; ++k) {
+            rr1.add(2*k);
+            rr2.add(2*k+1);
+        }
+        Assert.assertEquals(ImmutableRoaringBitmap.intersects(rr1, rr2),false);
+        rr1.add(2*500+1);
+        Assert.assertEquals(ImmutableRoaringBitmap.intersects(rr1, rr2),true);
+        final MutableRoaringBitmap rr3 = new MutableRoaringBitmap();
+        rr3.add(2*501+1);
+        Assert.assertEquals(ImmutableRoaringBitmap.intersects(rr3, rr2),true);
+        Assert.assertEquals(ImmutableRoaringBitmap.intersects(rr3, rr1),false);
+        for (int k = 0; k < 40000; ++k) {
+            rr1.add(2*k+1);
+        }
+        rr1.runOptimize();
+        Assert.assertEquals(ImmutableRoaringBitmap.intersects(rr1, rr2),true);
+    }
+
+ // From a bug report contributed by Kevin Karpenske
+ // this had created an array out of bounds error
+ @Test
+ public void fliptest_Karpenske() {
+     int[] array = new int[] { 343798, 343799, 343800, 343801, 343803,
+             343804, 343805, 343807, 343809, 343811, 343812, 343815, 343816,
+             343817, 343818, 343819, 343821, 343825, 343827, 343828, 343830,
+             343831, 343832, 343833, 343835, 343836, 343837, 343838, 343839,
+             343840, 343841, 343842, 343843, 343844, 343845, 343847, 343848,
+             343849, 343850, 343851, 343853, 343854, 343855, 343856, 343858,
+             343859, 343860, 343861, 343862, 343863, 343864, 343865, 343866,
+             343868, 343869, 343874, 343875, 343877, 343879, 343880, 343881,
+             343882, 343883, 343887, 343889, 343890, 343891, 343894, 343895,
+             343898, 343899, 343900, 343901, 343902, 343904, 343906, 343907,
+             343908, 343909, 343910, 343911, 343912, 343913, 343914, 343915,
+             343916, 343917, 343918, 343919, 343921, 343922, 343923, 343924,
+             343927, 343928, 343929, 343930, 343931, 343932, 343933, 343934,
+             343935, 343938, 343939, 343941, 343942, 343943, 343944, 343945,
+             343946, 343949, 343951, 343953, 343954, 343955, 343956, 343958,
+             343959, 343961, 343962, 343964, 343965, 343966, 343967, 343968,
+             343969, 343971, 343972, 343973, 343974, 343976, 343978, 343979,
+             343981, 343982, 343983, 343985, 343987, 343988, 343989, 343992,
+             343993, 343994, 343995, 343996, 343997, 343998, 344000, 344001,
+             344002, 344003, 344004, 344006, 344008, 344009, 344011, 344012,
+             344013, 344015, 344017, 344019, 344020, 344021, 344023, 344025,
+             344026, 344027, 344028, 344029, 344030, 344031, 344034, 344035,
+             344036, 344037, 344038, 344039, 344040, 344042, 344043, 344046,
+             344047 };
+     MutableRoaringBitmap bitmap = new MutableRoaringBitmap();
+     int[] indexes = array;
+     int rangeStart = 0;
+     for (int rangeEnd = 1; rangeEnd < indexes.length; rangeEnd++) {
+         if (indexes[rangeEnd - 1] + 1 != indexes[rangeEnd]) {
+             if (rangeStart == rangeEnd - 1) {
+                 bitmap.add(indexes[rangeStart]);
+             } else {
+                 bitmap.flip(indexes[rangeStart], indexes[rangeEnd - 1] + 1);
+             }
+             rangeStart = rangeEnd;
+         }
+     }
+     if (rangeStart == indexes.length - 1) {
+         bitmap.add(indexes[rangeStart]);
+     } else {
+         bitmap.flip(indexes[rangeStart], indexes[indexes.length - 1] + 1);
+     }
+     assertEquals(182, bitmap.getCardinality());
+ }
+ 
+ @Test
+ public void andCounttest3() {
+     //This is based on andtest3
+     final int[] arrayand = new int[11256];
+     int pos = 0;
+     final MutableRoaringBitmap rr = new MutableRoaringBitmap();
+     for (int k = 4000; k < 4256; ++k)
+         rr.add(k);
+     for (int k = 65536; k < 65536 + 4000; ++k)
+         rr.add(k);
+     for (int k = 3 * 65536; k < 3 * 65536 + 1000; ++k)
+         rr.add(k);
+     for (int k = 3 * 65536 + 1000; k < 3 * 65536 + 7000; ++k)
+         rr.add(k);
+     for (int k = 3 * 65536 + 7000; k < 3 * 65536 + 9000; ++k)
+         rr.add(k);
+     for (int k = 4 * 65536; k < 4 * 65536 + 7000; ++k)
+         rr.add(k);
+     for (int k = 6 * 65536; k < 6 * 65536 + 10000; ++k)
+         rr.add(k);
+     for (int k = 8 * 65536; k < 8 * 65536 + 1000; ++k)
+         rr.add(k);
+     for (int k = 9 * 65536; k < 9 * 65536 + 30000; ++k)
+         rr.add(k);
+     final MutableRoaringBitmap rr2 = new MutableRoaringBitmap();
+     for (int k = 4000; k < 4256; ++k) {
+         rr2.add(k);
+         arrayand[pos++] = k;
+     }
+     for (int k = 65536; k < 65536 + 4000; ++k) {
+         rr2.add(k);
+         arrayand[pos++] = k;
+     }
+     for (int k = 3 * 65536 + 1000; k < 3 * 65536 + 7000; ++k) {
+         rr2.add(k);
+         arrayand[pos++] = k;
+     }
+     for (int k = 6 * 65536; k < 6 * 65536 + 1000; ++k) {
+         rr2.add(k);
+         arrayand[pos++] = k;
+     }
+     for (int k = 7 * 65536; k < 7 * 65536 + 1000; ++k) {
+         rr2.add(k);
+     }
+     for (int k = 10 * 65536; k < 10 * 65536 + 5000; ++k) {
+         rr2.add(k);
+     }
+
+     final ImmutableRoaringBitmap rrand = ImmutableRoaringBitmap.and(rr, rr2);
+     final int rrandCount = ImmutableRoaringBitmap.andCardinality(rr, rr2);
+
+     Assert.assertEquals(rrand.getCardinality(), rrandCount);
+ }
+
+ @Test
+ public void andcounttest() {
+     //This is based on andtest
+     final MutableRoaringBitmap rr = new MutableRoaringBitmap();
+     for (int k = 0; k < 4000; ++k) {
+         rr.add(k);
+     }
+     rr.add(100000);
+     rr.add(110000);
+     final MutableRoaringBitmap rr2 = new MutableRoaringBitmap();
+     rr2.add(13);
+     final MutableRoaringBitmap rrand = ImmutableRoaringBitmap.and(rr, rr2);
+     assertEquals(rrand.getCardinality(), ImmutableRoaringBitmap.andCardinality(rr, rr2));
+     assertEquals(rrand.getCardinality(), ImmutableRoaringBitmap.andCardinality(rr2, rr));
+     rr.and(rr2);
+     assertEquals(rrand.getCardinality(), ImmutableRoaringBitmap.andCardinality(rr2, rr));
+ }
+ 
+ @Test
+ public void orcount() {
+     final MutableRoaringBitmap rr = new MutableRoaringBitmap();
+     for (int k = 0; k < 4000; ++k) {
+         rr.add(k);
+     }
+     rr.add(100000);
+     rr.add(110000);
+     final MutableRoaringBitmap rr2 = new MutableRoaringBitmap();
+     for (int k = 0; k < 4000; ++k) {
+         rr2.add(k);
+     }
+
+     final MutableRoaringBitmap rror = ImmutableRoaringBitmap.or(rr, rr2);
+     Assert.assertEquals(rror.getCardinality(),ImmutableRoaringBitmap.orCardinality(rr, rr2));
+
+ }
+
 
 }

@@ -99,6 +99,31 @@ public abstract class Container implements Iterable<Short>, Cloneable, Externali
     }
 
     /**
+     * Computes the bitwise AND of this container with another
+     * (intersection). This container as well as the provided container are
+     * left unaffected.
+     *
+     * @param x other container
+     * @return aggregated container
+     */
+    public int andCardinality(Container x) {
+        if (this.getCardinality() == 0)
+            return 0;
+        else if (x.getCardinality() == 0)
+            return 0;
+        else {
+            if (x instanceof ArrayContainer)
+                return andCardinality((ArrayContainer) x);
+            else if (x instanceof BitmapContainer)
+                return andCardinality((BitmapContainer) x);
+            return andCardinality((RunContainer) x);
+        }
+    }
+    
+    public abstract int andCardinality(ArrayContainer x);
+    public abstract int andCardinality(BitmapContainer x);
+    public abstract int andCardinality(RunContainer x);
+    /**
      * Computes the bitwise ANDNOT of this container with another
      * (difference). This container as well as the provided container are
      * left unaffected.
@@ -345,6 +370,45 @@ public abstract class Container implements Iterable<Short>, Cloneable, Externali
      */
     public abstract Container inot(int rangeStart, int rangeEnd);
 
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+     */
+    public boolean intersects(Container x) {
+        if (x instanceof ArrayContainer)
+            return intersects((ArrayContainer) x);
+        else if (x instanceof BitmapContainer)
+            return intersects((BitmapContainer) x);
+        return intersects((RunContainer) x);
+    }
+
+    
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+      */
+    public abstract boolean intersects(ArrayContainer x);
+
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+      */
+    public abstract boolean intersects(BitmapContainer x);
+
+    /**
+     * Returns true if the current container intersects the other container.
+     *
+     * @param x other container
+     * @return whether they intersect
+      */
+    public abstract boolean intersects(RunContainer x);
+    
     /**
      * Computes the in-place bitwise OR of this container with another
      * (union). The current container is generally modified, whereas the
@@ -710,20 +774,7 @@ public abstract class Container implements Iterable<Short>, Cloneable, Externali
       *   Overridden by BitmapContainer with a more efficient approach.
       *   @return the new container
       */
-
-     
-     public Container runOptimize() {
-         // TODO:  consider borrowing the BitmapContainer idea of early abandonment 
-         // with ArrayContainers, when the number of runs in the arrayContainer
-         // passes some threshold based on the cardinality.
-         int numRuns = numberOfRuns();
-         int sizeAsRunContainer = RunContainer.serializedSizeInBytes(numRuns);
-         if (getArraySizeInBytes() > sizeAsRunContainer) {
-             return new RunContainer(getShortIterator(),  numRuns); // this could be maybe faster if initial container is a bitmap
-         } else { 
-             return this;
-         }
-     }
+     public abstract Container runOptimize();
 
      abstract int numberOfRuns(); // exact
 }
