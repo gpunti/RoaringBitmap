@@ -6,8 +6,7 @@
 package org.roaringbitmap;
 
 import java.util.Map;
-import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -17,7 +16,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class ConcurrentBitmap {
 
-    private ConcurrentHashMap<Short, Element> highLowMap = new ConcurrentHashMap<Short, Element>();
+    private final ConcurrentSkipListMap<Short, Element> highLowMap = new ConcurrentSkipListMap<Short, Element>();
 
     public final void add(int x) {
         set(x, 1);
@@ -131,7 +130,8 @@ public class ConcurrentBitmap {
         @Override
         public Element clone() throws CloneNotSupportedException {
             Element c = (Element) super.clone();
-            // c.key copied by super.clone
+
+            c.key = this.key;
             c.value = this.value.clone();
             return c;
         }
@@ -156,11 +156,17 @@ public class ConcurrentBitmap {
     private final class ConcurrentIntIterator implements IntIterator {
 
         public ConcurrentIntIterator() {
-            nextContainer();
+            currentKey = highLowMap.firstKey();
+            Element e = highLowMap.get(currentKey);
+            if (e != null) {
+                ReentrantReadWriteLock hbLock = e.rwLock;
+                hbLock.readLock().lock();
+                iter = e.value.clone().getShortIterator();
+                hbLock.readLock().unlock();
+            }
         }
 
         private ShortIterator iter;
-        TreeSet<Short> sortedKeySet = new TreeSet<Short>();
 
         private int x;
 
@@ -173,15 +179,12 @@ public class ConcurrentBitmap {
 
         private void nextContainer() {
 
-            // update the ordered list of containers
-            sortedKeySet.clear();
-            sortedKeySet.addAll(highLowMap.keySet());
-
             boolean trySearchNextKey = true;
             Short nextKey = null;
             while ((nextKey == null) && trySearchNextKey) {
                 // get the next container
-                nextKey = sortedKeySet.higher(currentKey);
+                // nextKey = sortedKeySet.higher(currentKey);
+                nextKey = highLowMap.higherKey(currentKey);
                 trySearchNextKey = false;
 
                 if (nextKey != null) {
@@ -235,6 +238,10 @@ public class ConcurrentBitmap {
             }
         }
         return size;
+    }
+
+    public IntIterator getIterator() {
+        return new ConcurrentIntIterator();
     }
 
 }
