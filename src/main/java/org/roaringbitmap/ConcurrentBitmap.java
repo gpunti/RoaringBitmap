@@ -5,16 +5,21 @@
 
 package org.roaringbitmap;
 
+import java.util.Iterator;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import org.roaringbitmap.concurrent.BitmapInterface;
 
 /**
  * A thread-safe bitmap implementation. Concurrency is achieved by using
  * ReentrantReadWriteLocks at the container level and a ConcurrentHashMap to
  * maintain the container list integrity.
  */
-public class ConcurrentBitmap {
+public class ConcurrentBitmap implements BitmapInterface {
 
     private final ConcurrentSkipListMap<Short, Element> highLowMap = new ConcurrentSkipListMap<Short, Element>();
 
@@ -146,6 +151,52 @@ public class ConcurrentBitmap {
         return new ConcurrentIntIterator();
     }
 
+    private final class HighBitsIterator implements ShortIterator {
+
+        private Short current = null;
+
+        @Override
+        public boolean hasNext() {
+            if (current == null) {
+                return highLowMap.size() > 0;
+            } else {
+                return highLowMap.higherKey(current) != null;
+            }
+        }
+
+        @Override
+        public short next() {
+
+            if (current == null) {
+                current = highLowMap.firstKey();
+            } else {
+                current = highLowMap.higherKey(current);
+            }
+
+            if (current == null) {
+                throw new NoSuchElementException();
+            }
+
+            return current;
+        }
+
+        @Override
+        public int nextAsInt() {
+            return next();
+        }
+
+        @Override
+        public ShortIterator clone() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
+
+    }
+
     /**
      * This iterator is backed by the bitmap data. Changing the data in the
      * bitmap will change the data being iterated. This means that the data
@@ -155,22 +206,19 @@ public class ConcurrentBitmap {
      */
     private final class ConcurrentIntIterator implements IntIterator {
 
+        HighBitsIterator highBitsIterator = new HighBitsIterator();
+
+        private ShortIterator iter;
+        private int x;
+        private Short currentKey = Short.MIN_VALUE;
+
         public ConcurrentIntIterator() {
-            currentKey = highLowMap.firstKey();
-            Element e = highLowMap.get(currentKey);
-            if (e != null) {
-                ReentrantReadWriteLock hbLock = e.rwLock;
-                hbLock.readLock().lock();
-                iter = e.value.clone().getShortIterator();
-                hbLock.readLock().unlock();
+            if (highBitsIterator.hasNext()) {
+                currentKey = highBitsIterator.next();
+                iter = highLowMap.get(currentKey).value.getShortIterator();
             }
         }
 
-        private ShortIterator iter;
-
-        private int x;
-
-        private Short currentKey = Short.MIN_VALUE;
 
         @Override
         public boolean hasNext() {
