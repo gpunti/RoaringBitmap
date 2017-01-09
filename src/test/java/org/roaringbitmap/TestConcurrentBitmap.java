@@ -30,7 +30,7 @@ public class TestConcurrentBitmap {
 
     @Test
     public void testSimpleAdd() {
-        ConcurrentBitmap bitmap = new ConcurrentBitmap();
+        BitmapInterface bitmap = new ConcurrentBitmap();
         bitmap.add(308582);
         assertTrue(bitmap.contains(308582));
     }
@@ -46,7 +46,7 @@ public class TestConcurrentBitmap {
             threadSeeds[i] = r.nextLong();
         }
 
-        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+        final BitmapInterface concurrentBitmap = new ConcurrentBitmap();
 
         final CountDownLatch threadsReady = new CountDownLatch(NUM_THREADS);
         final CountDownLatch threadsFinished = new CountDownLatch(NUM_THREADS);
@@ -102,7 +102,7 @@ public class TestConcurrentBitmap {
             seeds[i] = seedsRandom.nextLong();
         }
 
-        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+        final BitmapInterface concurrentBitmap = new ConcurrentBitmap();
 
         final Random mapContentsRandom = new Random(478202868L);
 
@@ -162,7 +162,7 @@ public class TestConcurrentBitmap {
     public void testConcurrentAddAndRemove() throws InterruptedException {
 
         Random r = new Random(97494028L);
-        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+        final BitmapInterface concurrentBitmap = new ConcurrentBitmap();
 
         Executor executor = Executors.newCachedThreadPool();
         CountDownLatch threadsFinished = new CountDownLatch(NUM_THREADS);
@@ -249,13 +249,13 @@ public class TestConcurrentBitmap {
 
     class BitmapAccessThread implements Runnable {
 
-        private ConcurrentBitmap bitmap;
+        private BitmapInterface bitmap;
         private CountDownLatch doneSignal;
         protected Logger logger = Logger.getLogger(getClass().getName());
         final RoaringBitmap addedElements;
         final RoaringBitmap removedElements;
 
-        public BitmapAccessThread(ConcurrentBitmap bitmap, CountDownLatch doneSignal, RoaringBitmap addedElements, RoaringBitmap removedElements) {
+        public BitmapAccessThread(BitmapInterface bitmap, CountDownLatch doneSignal, RoaringBitmap addedElements, RoaringBitmap removedElements) {
             this.bitmap = bitmap;
             this.doneSignal = doneSignal;
             this.addedElements = addedElements;
@@ -330,7 +330,7 @@ public class TestConcurrentBitmap {
     @Test
     public void testIntIterator() {
         Random r = new Random(97494028L);
-        final ConcurrentBitmap concurrentBitmap = new ConcurrentBitmap();
+        final BitmapInterface concurrentBitmap = new ConcurrentBitmap();
 
         logger.info("Filling bitmap with " + NUM_ITERATIONS + " random numbers between 0 and " + NUM_RANGE + "...");
 

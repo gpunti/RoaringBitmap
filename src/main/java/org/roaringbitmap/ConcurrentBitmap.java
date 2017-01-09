@@ -5,14 +5,11 @@
 
 package org.roaringbitmap;
 
-import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import org.roaringbitmap.concurrent.BitmapInterface;
 
 /**
  * A thread-safe bitmap implementation. Concurrency is achieved by using
@@ -23,14 +20,18 @@ public class ConcurrentBitmap implements BitmapInterface {
 
     private final ConcurrentSkipListMap<Short, Element> highLowMap = new ConcurrentSkipListMap<Short, Element>();
 
+    @Override
     public final void add(int x) {
         set(x, 1);
     }
 
+
+    @Override
     public void remove(int x) {
         set(x, 0);
     }
 
+    @Override
     public boolean contains(int x) {
 
         boolean result = false;
@@ -95,6 +96,7 @@ public class ConcurrentBitmap implements BitmapInterface {
         }
     }
 
+    @Override
     public int getCardinality() {
         int result = 0;
         for (Element e : highLowMap.values()) {
@@ -147,6 +149,7 @@ public class ConcurrentBitmap implements BitmapInterface {
         }
     }
 
+    @Override
     public IntIterator getIntIterator() {
         return new ConcurrentIntIterator();
     }
@@ -274,6 +277,7 @@ public class ConcurrentBitmap implements BitmapInterface {
         }
     }
 
+    @Override
     public int getSizeInBytes() {
         int size = 8;
         for (Map.Entry<Short, Element> e : highLowMap.entrySet()) {
@@ -288,6 +292,7 @@ public class ConcurrentBitmap implements BitmapInterface {
         return size;
     }
 
+    @Override
     public IntIterator getIterator() {
         return new ConcurrentIntIterator();
     }
