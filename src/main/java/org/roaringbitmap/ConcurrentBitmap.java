@@ -25,10 +25,19 @@ public class ConcurrentBitmap implements BitmapInterface {
         set(x, 1);
     }
 
+    @Override
+    public final boolean checkedAdd(int x) {
+        return checkedSet(x, 1);
+    }
 
     @Override
     public void remove(int x) {
         set(x, 0);
+    }
+
+    @Override
+    public final boolean checkedRemove(int x) {
+        return checkedSet(x, 0);
     }
 
     @Override
@@ -94,6 +103,53 @@ public class ConcurrentBitmap implements BitmapInterface {
                 e.rwLock.writeLock().unlock();
             }
         }
+    }
+
+    protected boolean checkedSet(final int x, final int bitValue) {
+        boolean check = false;
+        final short hb = Util.highbits(x);
+
+        Element e = highLowMap.get(hb);
+
+        if ((e == null) && (bitValue == 1)) {
+            // we have to create a new container for this x
+            check = true;
+            e = new Element(hb, new ArrayContainer());
+            Element existing = highLowMap.putIfAbsent(hb, e);
+            if (existing != null) {
+                e = existing;
+            }
+        }
+
+        // Element might still be null if we are trying to remove a bit from a
+        // non-existing container. We just ignore that request, otherwise:
+        if (e != null) {
+            short lb = Util.lowbits(x);
+            e.rwLock.writeLock().lock();
+            try {
+                Container container = e.value;
+                final Container afterUpdate;
+                if (bitValue == 1) {
+                    afterUpdate = container.add(lb);
+                    if (afterUpdate != container) {
+                        e.value = afterUpdate;
+                        check = true;
+                    }
+                } else {
+                    afterUpdate = container.remove(lb);
+                    if (container.getCardinality() == 0) {
+                        highLowMap.remove(hb);
+                        check = true;
+                    } else if (afterUpdate != container) {
+                        e.value = afterUpdate;
+                        check = true;
+                    }
+                }
+            } finally {
+                e.rwLock.writeLock().unlock();
+            }
+        }
+        return check;
     }
 
     @Override

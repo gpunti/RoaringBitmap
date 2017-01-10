@@ -16,4 +16,8 @@ public interface BitmapInterface {
 
     IntIterator getIterator();
 
+    boolean checkedAdd(int x);
+
+    boolean checkedRemove(int x);
+
 }

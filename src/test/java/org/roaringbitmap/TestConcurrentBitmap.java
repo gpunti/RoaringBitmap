@@ -5,9 +5,7 @@
 
 package org.roaringbitmap;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import org.junit.Test;
 
 import java.util.Random;
 import java.util.Set;
@@ -17,7 +15,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
-import org.junit.Test;
+import static org.junit.Assert.*;
 
 public class TestConcurrentBitmap {
 
@@ -33,6 +31,23 @@ public class TestConcurrentBitmap {
         BitmapInterface bitmap = new ConcurrentBitmap();
         bitmap.add(308582);
         assertTrue(bitmap.contains(308582));
+    }
+
+    @Test
+    public void testSimpleCheckedAdd() {
+        BitmapInterface bitmap = new ConcurrentBitmap();
+        assertTrue(bitmap.checkedAdd(308582));
+        assertFalse(bitmap.checkedAdd(308582));
+        assertTrue(bitmap.contains(308582));
+    }
+
+    @Test
+    public void testSimpleCheckedRemove() {
+        BitmapInterface bitmap = new ConcurrentBitmap();
+        bitmap.add(308582);
+        assertTrue(bitmap.contains(308582));
+        assertTrue(bitmap.checkedRemove(308582));
+        assertFalse(bitmap.checkedRemove(308582));
     }
 
     @Test
