@@ -10,7 +10,6 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-
 /**
  * A thread-safe bitmap implementation. Concurrency is achieved by using
  * ReentrantReadWriteLocks at the container level and a ConcurrentHashMap to
@@ -21,14 +20,13 @@ public class ConcurrentBitmap implements BitmapInterface {
     private final ConcurrentSkipListMap<Short, Element> highLowMap = new ConcurrentSkipListMap<Short, Element>();
 
     @Override
-    public final void add(int x) {
-        set(x, 1);
+    public final boolean add(int x) {
+        return set(x, 1);
     }
 
-
     @Override
-    public void remove(int x) {
-        set(x, 0);
+    public final boolean remove(int x) {
+        return set(x, 0);
     }
 
     @Override
@@ -54,7 +52,9 @@ public class ConcurrentBitmap implements BitmapInterface {
         return result;
     }
 
-    protected void set(final int x, final int bitValue) {
+    protected boolean set(final int x, final int bitValue) {
+
+        boolean modified = false;
 
         final short hb = Util.highbits(x);
 
@@ -76,6 +76,7 @@ public class ConcurrentBitmap implements BitmapInterface {
             e.rwLock.writeLock().lock();
             try {
                 Container container = e.value;
+                long numElementsBefore = container.getCardinality();
                 final Container afterUpdate;
                 if (bitValue == 1) {
                     afterUpdate = container.add(lb);
@@ -90,10 +91,13 @@ public class ConcurrentBitmap implements BitmapInterface {
                         e.value = afterUpdate;
                     }
                 }
+                long numElementsAfter = container.getCardinality();
+                modified = numElementsAfter != numElementsBefore;
             } finally {
                 e.rwLock.writeLock().unlock();
             }
         }
+        return modified;
     }
 
     @Override
@@ -221,7 +225,6 @@ public class ConcurrentBitmap implements BitmapInterface {
                 iter = highLowMap.get(currentKey).value.getShortIterator();
             }
         }
-
 
         @Override
         public boolean hasNext() {

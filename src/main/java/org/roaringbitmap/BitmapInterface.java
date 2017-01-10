@@ -2,9 +2,19 @@ package org.roaringbitmap;
 
 public interface BitmapInterface {
 
-    void add(int x);
+    /**
+     * 
+     * @param x element to be added
+     * @return if the operation modified the bitmap cardinality
+     */
+    boolean add(int x);
 
-    void remove(int x);
+    /**
+     * 
+     * @param x element to be removed
+     * @return if the operation modified the bitmap cardinality
+     */
+    boolean remove(int x);
 
     boolean contains(int x);
 
